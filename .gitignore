@@ -1,0 +1,4 @@
+.direnv
+.vscode
+.envrc
+__pycache__

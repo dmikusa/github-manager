@@ -39,6 +39,7 @@ def handle_pr_approve(args):
     for repo in repos:
         prs = runner.pr_list(repo, args.filter)
         for pr in prs:
+            print(f"    Approving {repo} -> {pr['number']} [{pr['title']}]")
             stdout, stderr = runner.pr_approve(repo, pr['number'])
             if stdout:
                 print(stdout)
@@ -54,6 +55,7 @@ def _rerun_failed(runner, pr, repo):
     failed = [s for s in pr['statusCheckRollup']
               if s['conclusion'] == 'FAILURE']
     for fail in failed:
+        print(f"    Rerunning {repo} -> {fail['name']} ({fail['detailsUrl']}")
         run_num = fail['detailsUrl'].split('/')[-1]
         stdout, stderr = runner.action_run_rerun(repo, run_num)
         if stdout:
@@ -81,8 +83,9 @@ def handle_pr_merge(args):
     runner = GhRunner()
     repos = load_repos()
     for repo in repos:
-        prs = runner.pr_list(repo, args.filter)
+        prs = runner.pr_list(repo, args.filter, args.merge_state)
         for pr in prs:
+            print(f"    Merging {repo} -> {pr['number']} [{pr['title']}]")
             stdout, stderr = runner.pr_merge(repo, pr['number'])
             if stdout:
                 print(stdout)
@@ -114,11 +117,14 @@ def parse_args(args):
 
     merge_parser = subparser_pr.add_parser("merge", help="merge matching PRs")
     merge_parser.add_argument("--filter", help="keyword or Github filter")
+    merge_parser.add_argument(
+        "--merge-state", help="blocked or clean", choices=['blocked', 'clean'])
     merge_parser.set_defaults(func=handle_pr_merge)
 
     open_parser = subparser_pr.add_parser(
         "open", help="open the PR in a browser")
-    open_parser.add_argument("repo", help="repo where issue exists", type=str)
+    open_parser.add_argument(
+        "repo", help="repo where issue exists", type=str)
     open_parser.add_argument("number", help="PR number", type=int)
     open_parser.set_defaults(func=handle_open)
 

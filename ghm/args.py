@@ -1,6 +1,7 @@
 import argparse
 from .runner import GhRunner
 from .utils import load_repos, REPO_CONFIG_LOCATION
+from .cache import Cache
 
 
 def status_check_ok(s):
@@ -93,13 +94,24 @@ def handle_pr_merge(args):
                 print(stderr)
 
 
-def parse_args(args):
+def clear_cache(args):
+    Cache().clear()
+
+
+def parse_args():
     parser = argparse.ArgumentParser(
         description="Manage many Github repos in an efficient way")
 
     subparsers = parser.add_subparsers()
     subparsers.add_parser(
         "repos", help="list configured repos").set_defaults(func=handle_repos)
+
+    subparser_cache = subparsers.add_parser(
+        "cache", help="manage cache")
+
+    subparser_clear = subparser_cache.add_subparsers()
+    subparser_clear.add_parser(
+        "clear", help="clear cache").set_defaults(func=clear_cache)
 
     subparser_pr = subparsers.add_parser(
         "pr", help="manage PRs").add_subparsers()

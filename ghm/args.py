@@ -159,4 +159,4 @@ def parse_args():
         "--merge-state", help="blocked or clean", choices=['blocked', 'clean'])
     rerun_matching_parser.set_defaults(func=handle_action_rerun_matching)
 
-    return parser.parse_args(args)
+    return parser

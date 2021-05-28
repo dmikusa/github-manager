@@ -13,8 +13,12 @@ if __name__ == '__main__':
         print()
         sys.exit(-2)
 
-    res = ghm.args.parse_args(sys.argv[1:])
+    parser = ghm.args.parse_args()
     try:
+        res = parser.parse_args(sys.argv[1:])
+        if not hasattr(res, 'func'):
+            parser.print_help()
+            sys.exit(-3)
         res.func(res)
     except CalledProcessError as ex:
         print()

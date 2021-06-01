@@ -12,7 +12,7 @@ def cache(f):
     def wrapper(self, *args, **kwargs):
         cache = self._cache
 
-        parts = [f.__name__] + [a for a in args if a is not None]
+        parts = [f.__name__] + [str(a) for a in args if a is not None]
         key = hashlib.sha256("_".join(parts).encode()).hexdigest()
 
         if cache.exists(key):
@@ -26,8 +26,9 @@ def cache(f):
 
 def invalidate(f):
     @wraps(f)
-    def wrapper(*args, **kwargs):
-        val = f(*args, **kwargs)
+    def wrapper(self, *args, **kwargs):
+        cache = self._cache
+        val = f(self, *args, **kwargs)
         cache.clear()
         return val
     return wrapper

@@ -81,7 +81,7 @@ class GhRunner:
         out = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(out.stdout)
 
-    @cache
+    @invalidate
     def action_run_rerun(self, repo, number):
         """Rerun a failed Github Action"""
         job = self._fetch_action_job_by_id(repo, number)

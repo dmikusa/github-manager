@@ -8,6 +8,11 @@ def status_check_ok(s):
     return s['status'] == "COMPLETED" and s['conclusion'] == "SUCCESS"
 
 
+def pr_actions_ok(pr):
+    status = pr['statusCheckRollup'] and pr['statusCheckRollup'] or []
+    return str(all(map(status_check_ok, status)))
+
+
 def handle_repos(args):
     print(f"Repos configured in [{REPO_CONFIG_LOCATION}]")
     print("\t" + "\n\t".join(load_repos()))
@@ -37,7 +42,7 @@ def handle_pr_list(args):
                 pr['mergeable'],
                 pr['mergeStateStatus'],
                 pr['reviewDecision'],
-                str(all(map(status_check_ok, pr['statusCheckRollup']))),
+                pr_actions_ok(pr),
                 pr.get('author', {}).get('login', 'n/a'),
                 pr['title'][:50]
             ))

@@ -16,12 +16,21 @@ def handle_repos(args):
 def handle_pr_list(args):
     runner = GhRunner()
     repos = load_repos()
-    print("NUMBER\t\t\t\tSTATE\tMERGEABLE\tMERGE STATE\tREVIEW DEC"
-          "\tCHECK STATUS\tAUTHOR\tTITLE")
+    cols = "{:<45} {:^6} {:^10} {:^15} {:^10} {:^18} {:^10} {:^20} {}"
+    print(cols.format(
+        "REPO",
+        "NUMBER",
+        "STATE",
+        "MERGE?",
+        "MERGST",
+        "REVIEW",
+        "CHECK?",
+        "AUTHOR",
+        "TITLE"))
     for repo in repos:
         prs = runner.pr_list(repo, args.filter, args.merge_state)
         for pr in prs:
-            print("\t".join([
+            print(cols.format(
                 repo,
                 str(pr['number']),
                 pr['state'],
@@ -30,8 +39,8 @@ def handle_pr_list(args):
                 pr['reviewDecision'],
                 str(all(map(status_check_ok, pr['statusCheckRollup']))),
                 pr.get('author', {}).get('login', 'n/a'),
-                pr['title']
-            ]))
+                pr['title'][:50]
+            ))
 
 
 def handle_pr_approve(args):

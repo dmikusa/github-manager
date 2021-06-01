@@ -85,6 +85,10 @@ def handle_action_rerun_matching(args):
     repos = load_repos()
     for repo in repos:
         prs = runner.pr_list(repo, args.filter, args.merge_state)
+        if args.failed:
+            prs = [pr for pr in prs if any(
+                map(lambda pr: not status_check_ok(pr),
+                    pr['statusCheckRollup']))]
         for pr in prs:
             _rerun_failed(runner, pr, repo)
 
@@ -166,6 +170,8 @@ def parse_args():
         "--filter", help="keyword or Github filter")
     rerun_matching_parser.add_argument(
         "--merge-state", help="blocked or clean", choices=['blocked', 'clean'])
+    rerun_matching_parser.add_argument(
+        "--failed", help="only failed", action=argparse.BooleanOptionalAction)
     rerun_matching_parser.set_defaults(func=handle_action_rerun_matching)
 
     return parser

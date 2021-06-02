@@ -4,13 +4,23 @@ from .utils import load_repos, REPO_CONFIG_LOCATION
 from .cache import Cache
 
 
-def status_check_ok(s):
-    return s['status'] == "COMPLETED" and s['conclusion'] == "SUCCESS"
+def check_run_ok(s):
+    return s['__typename'] == 'CheckRun' and s['status'] == "COMPLETED" and \
+        s['conclusion'] == "SUCCESS"
+
+
+def check_status_context(s):
+    return s['__typename'] == 'StatusContext' and s['status'] == "" and \
+        s['conclusion'] == "" and s['state'] == "SUCCESS"
+
+
+def check_status_ok(s):
+    return check_run_ok(s) or check_status_context(s)
 
 
 def pr_actions_ok(pr):
     status = pr['statusCheckRollup'] and pr['statusCheckRollup'] or []
-    return str(all(map(status_check_ok, status)))
+    return str(all(map(check_status_ok, status)))
 
 
 def handle_repos(args):

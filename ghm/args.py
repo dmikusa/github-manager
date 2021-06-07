@@ -23,6 +23,10 @@ def pr_actions_ok(pr):
     return str(all(map(check_status_ok, status)))
 
 
+def filter_repos(repos, repo):
+    return [r for r in repos if repo is None or r == repo]
+
+
 def handle_repos(args):
     print(f"Repos configured in [{REPO_CONFIG_LOCATION}]")
     print("\t" + "\n\t".join(load_repos()))
@@ -30,7 +34,7 @@ def handle_repos(args):
 
 def handle_pr_list(args):
     runner = GhRunner()
-    repos = load_repos()
+    repos = filter_repos(load_repos(), args.repo)
     cols = "{:<45} {:^6} {:^10} {:^15} {:^10} {:^18} {:^10} {:^20} {}"
     print(cols.format(
         "REPO",
@@ -60,7 +64,7 @@ def handle_pr_list(args):
 
 def handle_pr_approve(args):
     runner = GhRunner()
-    repos = load_repos()
+    repos = filter_repos(load_repos(), args.repo)
     for repo in repos:
         prs = runner.pr_list(repo, args.filter)
         for pr in prs:
@@ -102,7 +106,7 @@ def handle_action_rerun_matching(args):
         prs = runner.pr_list(repo, args.filter, args.merge_state)
         if args.failed:
             prs = [pr for pr in prs if any(
-                map(lambda pr: not status_check_ok(pr),
+                map(lambda pr: not check_status_ok(pr),
                     pr['statusCheckRollup']))]
         for pr in prs:
             _rerun_failed(runner, pr, repo)
@@ -110,7 +114,7 @@ def handle_action_rerun_matching(args):
 
 def handle_pr_merge(args):
     runner = GhRunner()
-    repos = load_repos()
+    repos = filter_repos(load_repos(), args.repo)
     for repo in repos:
         prs = runner.pr_list(repo, args.filter, args.merge_state)
         for pr in prs:
@@ -144,21 +148,24 @@ def parse_args():
     subparser_pr = subparsers.add_parser(
         "pr", help="manage PRs").add_subparsers()
 
-    parser_list = subparser_pr.add_parser("list", help="list open PRs")
-    parser_list.add_argument("--filter", help="keyword or Github filter")
-    parser_list.add_argument(
+    list_parser = subparser_pr.add_parser("list", help="list open PRs")
+    list_parser.add_argument("--filter", help="keyword or Github filter")
+    list_parser.add_argument(
         "--merge-state", help="blocked or clean", choices=['blocked', 'clean'])
-    parser_list.set_defaults(func=handle_pr_list)
+    list_parser.add_argument('--repo', help="repo name")
+    list_parser.set_defaults(func=handle_pr_list)
 
     approve_parser = subparser_pr.add_parser(
         "approve", help="approve matching PRs")
     approve_parser.add_argument("--filter", help="keyword or Github filter")
+    approve_parser.add_argument('--repo', help="repo name")
     approve_parser.set_defaults(func=handle_pr_approve)
 
     merge_parser = subparser_pr.add_parser("merge", help="merge matching PRs")
     merge_parser.add_argument("--filter", help="keyword or Github filter")
     merge_parser.add_argument(
         "--merge-state", help="blocked or clean", choices=['blocked', 'clean'])
+    merge_parser.add_argument("--repo", help="repo name")
     merge_parser.set_defaults(func=handle_pr_merge)
 
     open_parser = subparser_pr.add_parser(

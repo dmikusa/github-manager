@@ -102,3 +102,20 @@ class GhRunner:
         cmd = ["gh", "workflow", "run", "-R", repo, name]
         res = subprocess.run(cmd, capture_output=True, check=True)
         return (res.stdout, res.stderr)
+
+    @cache
+    def fetch_draft_release(self, repo):
+        """Fetch the draft release of a repo"""
+        cmd = ["gh", "api", f"/repos/{repo}/releases"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        for release in json.loads(res.stdout):
+            if release['draft']:
+                return release
+
+    @invalidate
+    def release_publish(self, repo, id):
+        """Publish a draft release"""
+        cmd = ["gh", "api", f"/repos/{repo}/releases/{id}"
+               "-X", "PATCH", "-F", "prerelease=true"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        return json.loads(res.stdout)

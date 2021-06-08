@@ -1,7 +1,7 @@
 import argparse
 import re
 from .runner import GhRunner
-from .utils import load_repos, REPO_CONFIG_LOCATION
+from .utils import load_repos, REPO_CONFIG_LOCATION, fetch_buildpack_toml
 from .cache import Cache
 
 NOT_RUNNABLE = "could not create workflow dispatch event: HTTP 422:" \
@@ -27,8 +27,17 @@ def pr_actions_ok(pr):
     return str(all(map(check_status_ok, status)))
 
 
-def filter_repos(repos, repo):
-    return [r for r in repos if repo is None or r == repo]
+def filter_repos(repos, repo, filter=None):
+    if filter is None:
+        return [r for r in repos if repo is None or r == repo]
+
+    pattern = re.compile(filter)
+    result = []
+    for r in repos:
+        m = pattern.match(r)
+        if m:
+            result.append(r)
+    return result
 
 
 def handle_repos(args):
@@ -162,6 +171,64 @@ def handle_pr_merge(args):
                 print(stderr)
 
 
+def handle_release_list(args):
+    runner = GhRunner()
+
+    repos = []
+    if args.composite:
+        bp_toml = fetch_buildpack_toml(args.composite)
+        for order in bp_toml['order']:
+            for group in order['group']:
+                repos.append(group['id'])
+    else:
+        repos = load_repos()
+
+    repos = filter_repos(repos, args.repo, filter=args.filter)
+
+    for repo in repos:
+        r = runner.fetch_draft_release(repo)
+        if not r:
+            print(f"Skipping repo {repo}, no release found")
+            print()
+            continue
+        print(f"Release [{r['name'].strip()}]")
+        print(f"    Author: {r['author']['login']}")
+        print(f"    URL   : {r['url']}")
+        print(f"    Tag   : {r['tag_name']}")
+        print(f"    Draft : {r['draft']}")
+        print(f"    Pre   : {r['prerelease']}")
+        print("")
+        print(r['body'])
+        print()
+        print("--------------------------------------------------------------"
+              "--------------------------------------------------------------")
+        print()
+
+
+def handle_release_publish(args):
+    runner = GhRunner()
+
+    repos = []
+    if args.composite:
+        bp_toml = fetch_buildpack_toml(args.composite)
+        for order in bp_toml['order']:
+            for group in order['group']:
+                repos.append(group['id'])
+    else:
+        repos = load_repos()
+
+    repos = filter_repos(repos, args.repo, filter=args.filter)
+
+    for repo in repos:
+        r = runner.fetch_draft_release(repo)
+        if not r:
+            print(f"Skipping repo {repo}, no release found")
+            print()
+            continue
+        print(f"    Publishing release for {repo} -> [{r['name']}]")
+        runner.release_publish(repo, id)
+
+
 def clear_cache(args):
     Cache().clear()
 
@@ -183,6 +250,9 @@ def parse_args():
 
     subparser_pr = subparsers.add_parser(
         "pr", help="manage PRs").add_subparsers()
+
+    subparser_release = subparsers.add_parser(
+        "release", help="manage releases").add_subparsers()
 
     list_parser = subparser_pr.add_parser("list", help="list open PRs")
     list_parser.add_argument("--filter", help="keyword or Github filter")
@@ -218,7 +288,8 @@ def parse_args():
         "run", help="Run actions for a repo")
     run_parser.add_argument(
         "repo", help="filter by repo name")
-    run_parser.add_argument("--filter", help="regex filter for workflow name")
+    run_parser.add_argument(
+        "--filter", help="regex filter for workflow name")
     run_parser.set_defaults(func=handle_action_run)
 
     run_matching_parser = subparser_action.add_parser(
@@ -244,5 +315,23 @@ def parse_args():
     rerun_matching_parser.add_argument(
         "--failed", help="only failed", action=argparse.BooleanOptionalAction)
     rerun_matching_parser.set_defaults(func=handle_action_rerun_matching)
+
+    list_parser = subparser_release.add_parser(
+        "list", help="list releases and their notes")
+    list_parser.add_argument(
+        "--composite",
+        help="Target composite buildpack (release all dependency buildpacks)")
+    list_parser.add_argument("--repo", help="a specific repo to release")
+    list_parser.add_argument('--filter', help="regex to refine repos")
+    list_parser.set_defaults(func=handle_release_list)
+
+    publish_parser = subparser_release.add_parser(
+        "publish", help="publish a release")
+    publish_parser.add_argument(
+        "--composite",
+        help="Target composite buildpack (release all dependency buildpacks)")
+    publish_parser.add_argument("--repo", help="a specific repo to release")
+    publish_parser.add_argument('--filter', help="regex to refine repos")
+    publish_parser.set_defaults(func=handle_release_publish)
 
     return parser

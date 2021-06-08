@@ -219,14 +219,18 @@ def handle_release_publish(args):
 
     repos = filter_repos(repos, args.repo, filter=args.filter)
 
+    if not args.publish:
+        print("**DRY RUN** - add the `--publish` flag to actually publish")
+        print()
+
     for repo in repos:
         r = runner.fetch_draft_release(repo)
         if not r:
-            print(f"Skipping repo {repo}, no release found")
-            print()
+            print(f"    ** Skipping repo {repo}, no release found")
             continue
-        print(f"    Publishing release for {repo} -> [{r['name']}]")
-        runner.release_publish(repo, id)
+        print(f"    Publishing release for {repo} -> [{r['name'].strip()}]")
+        if args.publish:
+            runner.release_publish(repo, r['id'])
 
 
 def clear_cache(args):
@@ -332,6 +336,10 @@ def parse_args():
         help="Target composite buildpack (release all dependency buildpacks)")
     publish_parser.add_argument("--repo", help="a specific repo to release")
     publish_parser.add_argument('--filter', help="regex to refine repos")
+    publish_parser.add_argument(
+        '--publish',
+        help="defaults to a dry-run, this flag actually publishes",
+        action=argparse.BooleanOptionalAction)
     publish_parser.set_defaults(func=handle_release_publish)
 
     return parser

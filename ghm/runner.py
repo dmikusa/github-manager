@@ -115,7 +115,7 @@ class GhRunner:
     @invalidate
     def release_publish(self, repo, id):
         """Publish a draft release"""
-        cmd = ["gh", "api", f"/repos/{repo}/releases/{id}"
-               "-X", "PATCH", "-F", "prerelease=true"]
+        cmd = ["gh", "api", f"/repos/{repo}/releases/{id}",
+               "-X", "PATCH", "-F", "draft=false"]
         res = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(res.stdout)

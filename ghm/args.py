@@ -192,11 +192,12 @@ def handle_release_list(args):
             print()
             continue
         print(f"Release [{r['name'].strip()}]")
-        print(f"    Author: {r['author']['login']}")
-        print(f"    URL   : {r['url']}")
-        print(f"    Tag   : {r['tag_name']}")
-        print(f"    Draft : {r['draft']}")
-        print(f"    Pre   : {r['prerelease']}")
+        print(f"    Author : {r['author']['login']}")
+        print(f"    URL    : {r['url']}")
+        print(f"    Tag    : {r['tag_name']}")
+        print(f"    Draft  : {r['draft']}")
+        print(f"    Pre    : {r['prerelease']}")
+        print(f"    Version: {r['name'].strip().split()[-1:][0]}")
         print("")
         print(r['body'])
         print()
@@ -228,9 +229,11 @@ def handle_release_publish(args):
         if not r:
             print(f"    ** Skipping repo {repo}, no release found")
             continue
-        print(f"    Publishing release for {repo} -> [{r['name'].strip()}]")
+        name = " ".join(r['name'].strip().split()[:-1])
+        version = r['name'].strip().split()[-1:][0]
+        print(f"    Publishing release for {repo} -> [{name}/{version} ]")
         if args.publish:
-            runner.release_publish(repo, r['id'])
+            runner.release_publish(repo, r['id'], version)
 
 
 def clear_cache(args):

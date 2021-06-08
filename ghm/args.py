@@ -1,7 +1,11 @@
 import argparse
+import re
 from .runner import GhRunner
 from .utils import load_repos, REPO_CONFIG_LOCATION
 from .cache import Cache
+
+NOT_RUNNABLE = "could not create workflow dispatch event: HTTP 422:" \
+    " Workflow does not have 'workflow_dispatch' trigger"
 
 
 def check_run_ok(s):
@@ -78,6 +82,38 @@ def handle_pr_approve(args):
 
 def handle_open(args):
     GhRunner().pr_open(args.repo, args.number)
+
+
+def _run_workflow(runner, repo, filter):
+    pattern = re.compile(filter)
+
+    workflows = runner.workflow_list(repo)
+    for workflow in workflows:
+        m = pattern.match(workflow)
+        if filter is None or m:
+            print(f"    Running {repo} -> {workflow}")
+            try:
+                stdout, stderr = runner.workflow_run(repo, workflow)
+                if stdout:
+                    print(stdout)
+                if stderr:
+                    print(stderr)
+            except Exception as ex:
+                errMsg = ex.stderr.decode('UTF-8').strip()
+                if not errMsg.startswith(NOT_RUNNABLE):
+                    raise ex
+                print(f"        Skipped {repo}/{workflow}, not runnable")
+
+
+def handle_action_run(args):
+    _run_workflow(GhRunner(), args.repo, args.filter)
+
+
+def handle_action_run_matching(args):
+    runner = GhRunner()
+    repos = load_repos()
+    for repo in repos:
+        _run_workflow(runner, repo, args.filter)
 
 
 def _rerun_failed(runner, pr, repo):
@@ -177,6 +213,19 @@ def parse_args():
 
     subparser_action = subparsers.add_parser(
         "action", help="manage actions").add_subparsers()
+
+    run_parser = subparser_action.add_parser(
+        "run", help="Run actions for a repo")
+    run_parser.add_argument(
+        "repo", help="filter by repo name")
+    run_parser.add_argument("--filter", help="regex filter for workflow name")
+    run_parser.set_defaults(func=handle_action_run)
+
+    run_matching_parser = subparser_action.add_parser(
+        "run-matching", help="Run actions matching filter")
+    run_matching_parser.add_argument(
+        "--filter", help="regex filter for workflow name")
+    run_matching_parser.set_defaults(func=handle_action_run_matching)
 
     rerun_parser = subparser_action.add_parser(
         "rerun", help="Rerun failed actions for a PR")

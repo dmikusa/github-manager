@@ -88,3 +88,17 @@ class GhRunner:
         cmd = ["gh", "run", "rerun", "-R", repo, str(job['run_id'])]
         res = subprocess.run(cmd, capture_output=True, check=True)
         return (res.stdout, res.stderr)
+
+    @cache
+    def workflow_list(self, repo):
+        """List all of the workflows"""
+        cmd = ["gh", "workflow", "list", "-R", repo]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        return [" ".join(line.decode('utf-8').split()[0:-2])
+                for line in res.stdout.splitlines()]
+
+    def workflow_run(self, repo, name):
+        """Run a given workflow"""
+        cmd = ["gh", "workflow", "run", "-R", repo, name]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        return (res.stdout, res.stderr)

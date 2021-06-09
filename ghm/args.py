@@ -79,7 +79,7 @@ def handle_pr_approve(args):
     runner = GhRunner()
     repos = filter_repos(load_repos(), args.repo)
     for repo in repos:
-        prs = runner.pr_list(repo, args.filter)
+        prs = runner.pr_list(repo, args.filter, args.merge_state)
         for pr in prs:
             print(f"    Approving {repo} -> {pr['number']} [{pr['title']}]")
             stdout, stderr = runner.pr_approve(repo, pr['number'])
@@ -264,20 +264,28 @@ def parse_args():
     list_parser = subparser_pr.add_parser("list", help="list open PRs")
     list_parser.add_argument("--filter", help="keyword or Github filter")
     list_parser.add_argument(
-        "--merge-state", help="blocked or clean", choices=['blocked', 'clean'])
+        "--merge-state",
+        help="blocked, clean or draft. Prefix with `!` to negate.",
+        choices=['blocked', '!blocked', 'clean', '!clean', 'draft', '!draft'])
     list_parser.add_argument('--repo', help="repo name")
     list_parser.set_defaults(func=handle_pr_list)
 
     approve_parser = subparser_pr.add_parser(
         "approve", help="approve matching PRs")
     approve_parser.add_argument("--filter", help="keyword or Github filter")
+    approve_parser.add_argument(
+        "--merge-state",
+        help="blocked, clean or draft. Prefix with `!` to negate.",
+        choices=['blocked', '!blocked', 'clean', '!clean', 'draft', '!draft'])
     approve_parser.add_argument('--repo', help="repo name")
     approve_parser.set_defaults(func=handle_pr_approve)
 
     merge_parser = subparser_pr.add_parser("merge", help="merge matching PRs")
     merge_parser.add_argument("--filter", help="keyword or Github filter")
     merge_parser.add_argument(
-        "--merge-state", help="blocked or clean", choices=['blocked', 'clean'])
+        "--merge-state",
+        help="blocked, clean or draft. Prefix with `!` to negate.",
+        choices=['blocked', '!blocked', 'clean', '!clean', 'draft', '!draft'])
     merge_parser.add_argument("--repo", help="repo name")
     merge_parser.set_defaults(func=handle_pr_merge)
 
@@ -318,7 +326,9 @@ def parse_args():
     rerun_matching_parser.add_argument(
         "--filter", help="keyword or Github filter")
     rerun_matching_parser.add_argument(
-        "--merge-state", help="blocked or clean", choices=['blocked', 'clean'])
+        "--merge-state",
+        help="blocked, clean or draft. Prefix with `!` to negate.",
+        choices=['blocked', '!blocked', 'clean', '!clean', 'draft', '!draft'])
     rerun_matching_parser.add_argument(
         "--failed", help="only failed", action=argparse.BooleanOptionalAction)
     rerun_matching_parser.set_defaults(func=handle_action_rerun_matching)

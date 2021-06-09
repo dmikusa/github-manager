@@ -43,10 +43,14 @@ class GhRunner:
         if filter:
             cmd.extend(["--search", filter])
         if merge_state:
+            op = "=="
+            if merge_state.startswith('!'):
+                op = "!="
+                merge_state = merge_state[1:]
             cmd.extend(
                 ['-q',
-                 """[.[] | select(.mergeStateStatus == "{}") ]""".format(
-                     merge_state.upper())])
+                 """[.[] | select(.mergeStateStatus {} "{}") ]""".format(
+                     op, merge_state.upper())])
         out = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(out.stdout)
 

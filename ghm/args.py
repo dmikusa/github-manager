@@ -71,7 +71,7 @@ def handle_pr_list(args):
                 pr['reviewDecision'],
                 pr_actions_ok(pr),
                 pr.get('author', {}).get('login', 'n/a'),
-                pr['title'][:50]
+                pr['title'][:75]
             ))
 
 

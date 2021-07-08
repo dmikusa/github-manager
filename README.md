@@ -20,6 +20,24 @@ Ex:
 ] 
 ```
 
+## Usage
+
+If using `direnv`, add `.envrc` and `direnv allow`.
+
+```
+use_pyenv
+layout python python3
+export PYTHONPATH=.
+```
+
+or `export PYTHONPATH=.` and ensure that you have `python` or `python3` available.
+
+To run:
+
+```bash
+python scripts/manage.py --help
+```
+
 ## Functionality
 
 - List configured repos

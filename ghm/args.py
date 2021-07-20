@@ -47,7 +47,7 @@ def handle_repos(args):
 
 def handle_pr_list(args):
     runner = GhRunner()
-    repos = filter_repos(load_repos(), args.repo)
+    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
     cols = "{:<45} {:^6} {:^10} {:^15} {:^10} {:^18} {:^10} {:^20} {}"
     print(cols.format(
         "REPO",
@@ -77,7 +77,7 @@ def handle_pr_list(args):
 
 def handle_pr_approve(args):
     runner = GhRunner()
-    repos = filter_repos(load_repos(), args.repo)
+    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
     for repo in repos:
         prs = runner.pr_list(repo, args.filter, args.merge_state)
         for pr in prs:
@@ -159,7 +159,7 @@ def handle_action_rerun_matching(args):
 
 def handle_pr_merge(args):
     runner = GhRunner()
-    repos = filter_repos(load_repos(), args.repo)
+    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
     for repo in repos:
         prs = runner.pr_list(repo, args.filter, args.merge_state)
         for pr in prs:
@@ -268,6 +268,7 @@ def parse_args():
         help="blocked, clean or draft. Prefix with `!` to negate.",
         choices=['blocked', '!blocked', 'clean', '!clean', 'draft', '!draft'])
     list_parser.add_argument('--repo', help="repo name")
+    list_parser.add_argument('--repo-filter', help="filter on repo name")
     list_parser.set_defaults(func=handle_pr_list)
 
     approve_parser = subparser_pr.add_parser(
@@ -278,6 +279,7 @@ def parse_args():
         help="blocked, clean or draft. Prefix with `!` to negate.",
         choices=['blocked', '!blocked', 'clean', '!clean', 'draft', '!draft'])
     approve_parser.add_argument('--repo', help="repo name")
+    approve_parser.add_argument('--repo-filter', help="filter on repo name")
     approve_parser.set_defaults(func=handle_pr_approve)
 
     merge_parser = subparser_pr.add_parser("merge", help="merge matching PRs")
@@ -287,6 +289,7 @@ def parse_args():
         help="blocked, clean or draft. Prefix with `!` to negate.",
         choices=['blocked', '!blocked', 'clean', '!clean', 'draft', '!draft'])
     merge_parser.add_argument("--repo", help="repo name")
+    merge_parser.add_argument('--repo-filter', help="filter on repo name")
     merge_parser.set_defaults(func=handle_pr_merge)
 
     open_parser = subparser_pr.add_parser(

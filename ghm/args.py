@@ -120,7 +120,7 @@ def handle_action_run(args):
 
 def handle_action_run_matching(args):
     runner = GhRunner()
-    repos = load_repos()
+    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
     for repo in repos:
         _run_workflow(runner, repo, args.filter)
 
@@ -314,6 +314,9 @@ def parse_args():
         "run-matching", help="Run actions matching filter")
     run_matching_parser.add_argument(
         "--filter", help="regex filter for workflow name")
+    run_matching_parser.add_argument("--repo", help="repo name")
+    run_matching_parser.add_argument(
+        '--repo-filter', help="filter on repo name")
     run_matching_parser.set_defaults(func=handle_action_run_matching)
 
     rerun_parser = subparser_action.add_parser(

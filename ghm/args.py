@@ -164,7 +164,7 @@ def handle_pr_merge(args):
         prs = runner.pr_list(repo, args.filter, args.merge_state)
         for pr in prs:
             print(f"    Merging {repo} -> {pr['number']} [{pr['title']}]")
-            stdout, stderr = runner.pr_merge(repo, pr['number'])
+            stdout, stderr = runner.pr_merge(repo, pr['number'], args.admin)
             if stdout:
                 print(stdout)
             if stderr:
@@ -290,6 +290,8 @@ def parse_args():
         choices=['blocked', '!blocked', 'clean', '!clean', 'draft', '!draft'])
     merge_parser.add_argument("--repo", help="repo name")
     merge_parser.add_argument('--repo-filter', help="filter on repo name")
+    merge_parser.add_argument('--admin', help="use admin privileges to merge",
+                              action=argparse.BooleanOptionalAction)
     merge_parser.set_defaults(func=handle_pr_merge)
 
     open_parser = subparser_pr.add_parser(

@@ -72,9 +72,11 @@ class GhRunner:
         subprocess.run(cmd, capture_output=True, check=True)
 
     @invalidate
-    def pr_merge(self, repo, number):
+    def pr_merge(self, repo, number, admin):
         """Merge the PR"""
         cmd = ["gh", "pr", "merge", "-R", repo, str(number), "-m"]
+        if admin:
+            cmd.append("--admin")
         res = subprocess.run(cmd, capture_output=True, check=True)
         return (res.stdout, res.stderr)
 

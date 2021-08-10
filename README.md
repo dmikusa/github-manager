@@ -4,7 +4,8 @@ A simple project built on top of the `gh` cli utility that allows you to effecti
 
 ## Requirements
 
-Just Python 3. Tested with 3.9.
+- Python 3. Tested with 3.9.
+- The [`gh` cli](https://cli.github.com/)
 
 ## Configuration
 

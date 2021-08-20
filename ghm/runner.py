@@ -80,6 +80,15 @@ class GhRunner:
         res = subprocess.run(cmd, capture_output=True, check=True)
         return (res.stdout, res.stderr)
 
+    @invalidate
+    def pr_update_branch(self, repo, number):
+        """Update branch of the PR"""
+        cmd = ["gh", "api", "-X", "PUT", "-H",
+               "Accept: application/vnd.github.lydian-preview+json",
+               f"/repos/{repo}/pulls/{str(number)}/update-branch"]
+        out = subprocess.run(cmd, capture_output=True, check=True)
+        return json.loads(out.stdout)
+
     @cache
     def _fetch_action_job_by_id(self, repo, id):
         """Fetches a job by its id"""

@@ -171,6 +171,22 @@ def handle_pr_merge(args):
                 print(stderr)
 
 
+def handle_pr_branch_update(args):
+    runner = GhRunner()
+    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+    for repo in repos:
+        prs = runner.pr_list(repo, args.filter, args.merge_state)
+        for pr in prs:
+            if pr['mergeStateStatus'] == 'BEHIND' or args.force:
+                print(f"    Updating branch {repo} -> "
+                      f"{pr['number']} [{pr['title']}]")
+                resp = runner.pr_update_branch(repo, pr['number'])
+                if 'message' not in resp.keys() or \
+                        resp['message'] != 'Updating pull request branch.':
+                    print("Unexpected response:")
+                    print(f"    {resp}")
+
+
 def handle_release_list(args):
     runner = GhRunner()
 
@@ -293,6 +309,21 @@ def parse_args():
     merge_parser.add_argument('--admin', help="use admin privileges to merge",
                               action=argparse.BooleanOptionalAction)
     merge_parser.set_defaults(func=handle_pr_merge)
+
+    update_br_parser = subparser_pr.add_parser(
+        "update-branch", help="update the PR's branch")
+    update_br_parser.add_argument("--filter", help="keyword or Github filter")
+    update_br_parser.add_argument(
+        "--merge-state",
+        help="blocked, clean or draft. Prefix with `!` to negate.",
+        choices=['blocked', '!blocked', 'clean', '!clean', 'draft', '!draft'])
+    update_br_parser.add_argument("--repo", help="repo name")
+    update_br_parser.add_argument('--repo-filter', help="filter on repo name")
+    update_br_parser.add_argument(
+        '--force',
+        help="force update despite merge status",
+        action=argparse.BooleanOptionalAction)
+    update_br_parser.set_defaults(func=handle_pr_branch_update)
 
     open_parser = subparser_pr.add_parser(
         "open", help="open the PR in a browser")

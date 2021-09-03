@@ -48,5 +48,6 @@ python scripts/manage.py --help
 - Re-running failed tests from actions triggered by similar PRs across a number of projects (i.e. `Bump abc to x.y.z` across 25 projects)
 - Open your browser to a particular PR in a particular repo
 - Run actions across a number of projects (i.e. `Unit tests` across 25 projects)
+- Bulk enable and disable workflows across projects
 - List draft releases across a number of projects
 - Publish a draft release across a number of projects

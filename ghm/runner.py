@@ -118,6 +118,18 @@ class GhRunner:
         res = subprocess.run(cmd, capture_output=True, check=True)
         return (res.stdout, res.stderr)
 
+    def workflow_enable(self, repo, name):
+        """Enable a given workflow"""
+        cmd = ["gh", "workflow", "enable", "-R", repo, name]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        return (res.stdout, res.stderr)
+
+    def workflow_disable(self, repo, name):
+        """Disable a given workflow"""
+        cmd = ["gh", "workflow", "disable", "-R", repo, name]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        return (res.stdout, res.stderr)
+
     @cache
     def fetch_draft_release(self, repo):
         """Fetch the draft release of a repo"""

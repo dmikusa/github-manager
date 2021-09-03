@@ -6,6 +6,7 @@ from .cache import Cache
 
 NOT_RUNNABLE = "could not create workflow dispatch event: HTTP 422:" \
     " Workflow does not have 'workflow_dispatch' trigger"
+NOT_FOUND_WORKFLOW = 'could not find any workflows named'
 
 
 def check_run_ok(s):
@@ -157,6 +158,54 @@ def handle_action_rerun_matching(args):
             _rerun_failed(runner, pr, repo)
 
 
+def handle_action_enable_matching(args):
+    runner = GhRunner()
+    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+    pattern = re.compile(args.filter is None and '.*' or args.filter)
+
+    for repo in repos:
+        workflows = runner.workflow_list(repo)
+        for workflow in workflows:
+            m = pattern.match(workflow)
+            if args.filter is None or m:
+                print(f"    Enabling {repo} -> {workflow}")
+                try:
+                    stdout, stderr = runner.workflow_enable(repo, workflow)
+                    if stdout:
+                        print(stdout)
+                    if stderr:
+                        print(stderr)
+                except Exception as ex:
+                    errMsg = ex.stderr.decode('UTF-8').strip()
+                    if not errMsg.startswith(NOT_FOUND_WORKFLOW):
+                        raise ex
+                    print("        Skipped. Already enabled?")
+
+
+def handle_action_disable_matching(args):
+    runner = GhRunner()
+    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+    pattern = re.compile(args.filter is None and '.*' or args.filter)
+
+    for repo in repos:
+        workflows = runner.workflow_list(repo)
+        for workflow in workflows:
+            m = pattern.match(workflow)
+            if args.filter is None or m:
+                print(f"    Disabling {repo} -> {workflow}")
+                try:
+                    stdout, stderr = runner.workflow_disable(repo, workflow)
+                    if stdout:
+                        print(stdout)
+                    if stderr:
+                        print(stderr)
+                except Exception as ex:
+                    errMsg = ex.stderr.decode('UTF-8').strip()
+                    if not errMsg.startswith(NOT_FOUND_WORKFLOW):
+                        raise ex
+                    print("        Skipped. Already disabled?")
+
+
 def handle_pr_merge(args):
     runner = GhRunner()
     repos = filter_repos(load_repos(), args.repo, args.repo_filter)
@@ -277,6 +326,9 @@ def parse_args():
     subparser_release = subparsers.add_parser(
         "release", help="manage releases").add_subparsers()
 
+    subparser_action = subparsers.add_parser(
+        "action", help="manage actions").add_subparsers()
+
     list_parser = subparser_pr.add_parser("list", help="list open PRs")
     list_parser.add_argument("--filter", help="keyword or Github filter")
     list_parser.add_argument(
@@ -332,9 +384,6 @@ def parse_args():
     open_parser.add_argument("number", help="PR number", type=int)
     open_parser.set_defaults(func=handle_open)
 
-    subparser_action = subparsers.add_parser(
-        "action", help="manage actions").add_subparsers()
-
     run_parser = subparser_action.add_parser(
         "run", help="Run actions for a repo")
     run_parser.add_argument(
@@ -371,6 +420,24 @@ def parse_args():
     rerun_matching_parser.add_argument(
         "--failed", help="only failed", action=argparse.BooleanOptionalAction)
     rerun_matching_parser.set_defaults(func=handle_action_rerun_matching)
+
+    enable_matching_parser = subparser_action.add_parser(
+        "enable-matching", help="Enable actions matching filter")
+    enable_matching_parser.add_argument(
+        "--filter", help="regex filter for workflow name")
+    enable_matching_parser.add_argument("--repo", help="repo name")
+    enable_matching_parser.add_argument(
+        '--repo-filter', help="filter on repo name")
+    enable_matching_parser.set_defaults(func=handle_action_enable_matching)
+
+    disable_matching_parser = subparser_action.add_parser(
+        "disable-matching", help="Disable actions matching filter")
+    disable_matching_parser.add_argument(
+        "--filter", help="regex filter for workflow name")
+    disable_matching_parser.add_argument("--repo", help="repo name")
+    disable_matching_parser.add_argument(
+        '--repo-filter', help="filter on repo name")
+    disable_matching_parser.set_defaults(func=handle_action_disable_matching)
 
     list_parser = subparser_release.add_parser(
         "list", help="list releases and their notes")

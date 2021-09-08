@@ -209,15 +209,31 @@ def handle_action_disable_matching(args):
 def handle_pr_merge(args):
     runner = GhRunner()
     repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+    break_merging = False
     for repo in repos:
+        if break_merging: break
         prs = runner.pr_list(repo, args.filter, args.merge_state)
         for pr in prs:
             print(f"    Merging {repo} -> {pr['number']} [{pr['title']}]")
-            stdout, stderr = runner.pr_merge(repo, pr['number'], args.admin)
-            if stdout:
-                print(stdout)
-            if stderr:
-                print(stderr)
+            try:
+                stdout, stderr = runner.pr_merge(repo, pr['number'], args.admin)
+                if stderr:
+                    print(stderr)
+                if stdout:
+                    print(stdout)
+            except Exception as ex:
+                if ex.stderr:
+                    print("An error occurred while attempting to merge:")
+                    print((ex.stderr).decode())
+                if ex.returncode != 0:
+                    if args.skip_failing:
+                        continue
+                    if single_yes_or_no_question("Do you wish to continue merging?", True):
+                        continue
+                    else:
+                        break_merging = True 
+                        break
+            
 
 
 def handle_pr_branch_update(args):
@@ -304,6 +320,17 @@ def handle_release_publish(args):
 def clear_cache(args):
     Cache().clear()
 
+def single_yes_or_no_question(question, default_no=True):
+    choices = ' [y/N]: ' if default_no else ' [Y/n]: '
+    default_answer = 'n' if default_no else 'y'
+    reply = str(input(question + choices)).lower().strip() or default_answer
+    if reply[0] == 'y':
+        return True
+    if reply[0] == 'n':
+        return False
+    else:
+        return False if default_no else True
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -359,6 +386,8 @@ def parse_args():
     merge_parser.add_argument("--repo", help="repo name")
     merge_parser.add_argument('--repo-filter', help="filter on repo name")
     merge_parser.add_argument('--admin', help="use admin privileges to merge",
+                              action=argparse.BooleanOptionalAction)
+    merge_parser.add_argument("--skip-failing", help="skip past any merges that fail",
                               action=argparse.BooleanOptionalAction)
     merge_parser.set_defaults(func=handle_pr_merge)
 

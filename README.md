@@ -33,6 +33,12 @@ export PYTHONPATH=.
 
 or `export PYTHONPATH=.` and ensure that you have `python` or `python3` available.
 
+Install required libraries:
+
+```bash
+pip install -r requirements.txt
+```
+
 To run:
 
 ```bash

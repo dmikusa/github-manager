@@ -1,5 +1,7 @@
 import argparse
 import re
+import timeago, datetime
+from prettytable import PrettyTable
 from .runner import GhRunner
 from .utils import load_repos, REPO_CONFIG_LOCATION, fetch_buildpack_toml
 from .cache import Cache
@@ -169,8 +171,8 @@ def handle_pr_merge(args):
                 print(stdout)
             if stderr:
                 print(stderr)
-                
-                
+
+
 def handle_pr_branch_update(args):
     runner = GhRunner()
     repos = filter_repos(load_repos(), args.repo, args.repo_filter)
@@ -201,12 +203,14 @@ def handle_release_list(args):
 
     repos = filter_repos(repos, args.repo, filter=args.filter)
 
-    if args.short:
-        x = PrettyTable()
-        x.field_names = ["REPO", "LATEST VERSION", "DRAFT AVAILABLE", "LAST RELEASE DATE", "SINCE LAST RELEASE"]
-        x.align["REPO"] = 'l'
+    if args.summary:
+        pt = PrettyTable()
+        pt.field_names = ["REPO", "LATEST VERSION", "DRAFT AVAILABLE", "LAST RELEASE DATE", "SINCE LAST RELEASE"]
+        pt.align["REPO"] = 'l'
+        table, drafts = [], [] # separate list for drafts as these aren't sortable by date
         for repo in repos:
               r = runner.fetch_latest_release(repo)
+
               # 2 latest releases are returned per repo
               if not r:
                     print(f"Skipping repo {repo}, no release found")
@@ -214,7 +218,7 @@ def handle_release_list(args):
                     continue
               if len(r) == 1:   # only 1 release exists, determine if it is a Draft
                   if r[0][1] == 'Draft':
-                    x.add_row([repo, "Draft", "YES", "N/A", "N/A"])
+                    drafts.append([repo, "Draft", "YES", "N/A", "N/A"])
                     continue
                   else:
                     draft = "NO"
@@ -226,9 +230,14 @@ def handle_release_list(args):
                   else:
                      draft = "NO"
                      r = r[0]
-              rDate = datetime.datetime.strptime(r[3], "%Y-%m-%dT%H:%M:%S%z").date() # removed the timestamp since we don't need this granularity and also there are issues with TZ
-              x.add_row([repo,r[0].strip().split()[-1:][0],draft, rDate,timeago.format(rDate, datetime.datetime.now())]) # Used timeago lib to format readable duration since last release
-        print(x) 
+              # removed the timestamp since we don't need this granularity and also there are issues with TZ
+              rDate = datetime.datetime.strptime(r[3], "%Y-%m-%dT%H:%M:%S%z").date() 
+              # Used timeago library to format readable duration since last release
+              table.append([repo,r[0].strip().split()[-1:][0],draft, rDate,timeago.format(rDate, datetime.datetime.now())])
+        sorted_table = drafts
+        sorted_table.extend(sorted(table, key=lambda row: row[-2]))     # sort by last-release-date column
+        pt.add_rows(sorted_table)
+        print(pt) 
     else:
         for repo in repos:
             r = runner.fetch_draft_release(repo)
@@ -316,6 +325,7 @@ def parse_args():
         choices=['blocked', '!blocked', 'clean', '!clean', 'draft', '!draft'])
     list_parser.add_argument('--repo', help="repo name")
     list_parser.add_argument('--repo-filter', help="filter on repo name")
+
     list_parser.set_defaults(func=handle_pr_list)
 
     approve_parser = subparser_pr.add_parser(
@@ -409,10 +419,11 @@ def parse_args():
         "--composite",
         help="Target composite buildpack (release all dependency buildpacks)")
     list_parser.add_argument(
-        "--short", nargs='?', const=True, default=False, 
+        "--summary", nargs='?', const=True, default=False, 
         help="Show latest release for repo (summary only)")
     list_parser.add_argument("--repo", help="a specific repo to release")
     list_parser.add_argument('--filter', help="regex to refine repos")
+    
     list_parser.set_defaults(func=handle_release_list)
 
     publish_parser = subparser_release.add_parser(

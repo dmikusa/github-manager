@@ -127,6 +127,15 @@ class GhRunner:
             if release['draft']:
                 return release
 
+    
+    def fetch_latest_release(self, repo):
+        """Fetch the latest 2 releases of a repo"""
+        cmd = ["gh", "release", "list", "-R", repo, "-L", "2"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        return [(line.decode('utf-8').split("\t")[0:])
+                for line in res.stdout.splitlines()]
+
+
     @invalidate
     def release_publish(self, repo, id, tag):
         """Publish a draft release"""

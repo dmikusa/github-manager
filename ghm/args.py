@@ -216,7 +216,11 @@ def handle_pr_merge(args):
         if break_merging: break
         prs = runner.pr_list(repo, args.filter, args.merge_state)
         for pr in prs:
-            print(f"    Merging {repo} -> {pr['number']} [{pr['title']}]")
+            if args.with_approve:
+                print(f"    Approving & Merging {repo} -> {pr['number']} [{pr['title']}]")
+                runner.pr_approve(repo, pr['number'])
+            else:
+                print(f"    Merging {repo} -> {pr['number']} [{pr['title']}]")
             try:
                 stdout, stderr = runner.pr_merge(repo, pr['number'], args.admin)
                 if stderr:
@@ -429,6 +433,8 @@ def parse_args():
     merge_parser.add_argument('--admin', help="use admin privileges to merge",
                               action=argparse.BooleanOptionalAction)
     merge_parser.add_argument("--skip-failing", help="skip past any merges that fail",
+                              action=argparse.BooleanOptionalAction)
+    merge_parser.add_argument("--with-approve", help="approve PR before merging",
                               action=argparse.BooleanOptionalAction)
     merge_parser.set_defaults(func=handle_pr_merge)
 

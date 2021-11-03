@@ -1,6 +1,7 @@
 import argparse
 import re
-import timeago, datetime
+import timeago
+import datetime
 from prettytable import PrettyTable
 from .runner import GhRunner
 from .utils import load_repos, REPO_CONFIG_LOCATION, fetch_buildpack_toml
@@ -213,16 +214,20 @@ def handle_pr_merge(args):
     repos = filter_repos(load_repos(), args.repo, args.repo_filter)
     break_merging = False
     for repo in repos:
-        if break_merging: break
+        if break_merging:
+            break
         prs = runner.pr_list(repo, args.filter, args.merge_state)
         for pr in prs:
             if args.with_approve:
-                print(f"    Approving & Merging {repo} -> {pr['number']} [{pr['title']}]")
+                print(
+                    f"    Approving & Merging {repo} -> "
+                    f"{pr['number']} [{pr['title']}]")
                 runner.pr_approve(repo, pr['number'])
             else:
                 print(f"    Merging {repo} -> {pr['number']} [{pr['title']}]")
             try:
-                stdout, stderr = runner.pr_merge(repo, pr['number'], args.admin)
+                stdout, stderr = runner.pr_merge(
+                    repo, pr['number'], args.admin)
                 if stderr:
                     print(stderr)
                 if stdout:
@@ -234,12 +239,12 @@ def handle_pr_merge(args):
                 if ex.returncode != 0:
                     if args.skip_failing:
                         continue
-                    if single_yes_or_no_question("Do you wish to continue merging?", True):
+                    if single_yes_or_no_question(
+                            "Do you wish to continue merging?", True):
                         continue
                     else:
-                        break_merging = True 
+                        break_merging = True
                         break
-            
 
 
 def handle_pr_branch_update(args):
@@ -274,39 +279,50 @@ def handle_release_list(args):
 
     if args.summary:
         pt = PrettyTable()
-        pt.field_names = ["REPO", "LATEST VERSION", "DRAFT AVAILABLE", "LAST RELEASE DATE", "SINCE LAST RELEASE"]
+        pt.field_names = ["REPO", "LATEST VERSION", "DRAFT AVAILABLE",
+                          "LAST RELEASE DATE", "SINCE LAST RELEASE"]
         pt.align["REPO"] = 'l'
-        table, drafts = [], [] # separate list for drafts as these aren't sortable by date
+        # separate list for drafts as these aren't sortable by date
+        table, drafts = [], []
         for repo in repos:
-              r = runner.fetch_latest_release(repo)
+            r = runner.fetch_latest_release(repo)
 
-              # 2 latest releases are returned per repo
-              if not r:
-                    print(f"Skipping repo {repo}, no release found")
-                    print()
-                    continue
-              if len(r) == 1:   # only 1 release exists, determine if it is a Draft
-                  if r[0][1] == 'Draft':
+            # 2 latest releases are returned per repo
+            if not r:
+                print(f"Skipping repo {repo}, no release found")
+                print()
+                continue
+            # only 1 release exists, determine if it is a Draft
+            if len(r) == 1:
+                if r[0][1] == 'Draft':
                     drafts.append([repo, "Draft", "YES", "N/A", "N/A"])
                     continue
-                  else:
+                else:
                     draft = "NO"
                     r = r[0]
-              else: # If the top release is a Draft, note this for the Available? column and use the second release for the row
-                  if r[0][1] == 'Draft':
-                        draft = "YES"
-                        r = r[1]
-                  else:
-                     draft = "NO"
-                     r = r[0]
-              # removed the timestamp since we don't need this granularity and also there are issues with TZ
-              rDate = datetime.datetime.strptime(r[3], "%Y-%m-%dT%H:%M:%S%z").date() 
-              # Used timeago library to format readable duration since last release
-              table.append([repo,r[0].strip().split()[-1:][0],draft, rDate,timeago.format(rDate, datetime.datetime.now())])
+            # If the top release is a Draft, note this for the Available?
+            # column and use the second release for the row
+            else:
+                if r[0][1] == 'Draft':
+                    draft = "YES"
+                    r = r[1]
+                else:
+                    draft = "NO"
+                    r = r[0]
+            # removed the timestamp since we don't need this granularity
+            # and also there are issues with TZ
+            rDate = datetime.datetime.strptime(
+                r[3], "%Y-%m-%dT%H:%M:%S%z").date()
+            # Used timeago library to format readable duration since last
+            # release
+            table.append([repo, r[0].strip().split()[-1:][0], draft,
+                         rDate, timeago.format(rDate,
+                         datetime.datetime.now())])
         sorted_table = drafts
-        sorted_table.extend(sorted(table, key=lambda row: row[-2]))     # sort by last-release-date column
+        # sort by last-release-date column
+        sorted_table.extend(sorted(table, key=lambda row: row[-2]))
         pt.add_rows(sorted_table)
-        print(pt) 
+        print(pt)
     else:
         for repo in repos:
             r = runner.fetch_draft_release(repo)
@@ -324,11 +340,8 @@ def handle_release_list(args):
             print("")
             print(r['body'])
             print()
-            print("--------------------------------------------------------------"
-                "--------------------------------------------------------------")
+            print(124 * '-')
             print()
-
-
 
 
 def handle_release_publish(args):
@@ -363,6 +376,7 @@ def handle_release_publish(args):
 
 def clear_cache(args):
     Cache().clear()
+
 
 def single_yes_or_no_question(question, default_no=True):
     choices = ' [y/N]: ' if default_no else ' [Y/n]: '
@@ -432,9 +446,11 @@ def parse_args():
     merge_parser.add_argument('--repo-filter', help="filter on repo name")
     merge_parser.add_argument('--admin', help="use admin privileges to merge",
                               action=argparse.BooleanOptionalAction)
-    merge_parser.add_argument("--skip-failing", help="skip past any merges that fail",
+    merge_parser.add_argument("--skip-failing",
+                              help="skip past any merges that fail",
                               action=argparse.BooleanOptionalAction)
-    merge_parser.add_argument("--with-approve", help="approve PR before merging",
+    merge_parser.add_argument("--with-approve",
+                              help="approve PR before merging",
                               action=argparse.BooleanOptionalAction)
     merge_parser.set_defaults(func=handle_pr_merge)
 
@@ -521,11 +537,11 @@ def parse_args():
         "--composite",
         help="Target composite buildpack (release all dependency buildpacks)")
     list_parser.add_argument(
-        "--summary", nargs='?', const=True, default=False, 
+        "--summary", nargs='?', const=True, default=False,
         help="Show latest release for repo (summary only)")
     list_parser.add_argument("--repo", help="a specific repo to release")
     list_parser.add_argument('--filter', help="regex to refine repos")
-    
+
     list_parser.set_defaults(func=handle_release_list)
 
     publish_parser = subparser_release.add_parser(

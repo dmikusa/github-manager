@@ -211,22 +211,25 @@ def handle_action_disable_matching(args):
 
 def handle_action_run_active_list(args):
     runner = GhRunner()
-    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+    repos = filter_repos(load_repos(args.all_repos),
+                         args.repo, args.repo_filter)
 
     pt = PrettyTable()
-    pt.field_names = ["REPO", "STATUS", "EVENT", "CREATED AT",
+    pt.field_names = ["REPO", "ID", "STATUS", "EVENT", "CREATED AT",
                       "RUN STARTED AT", "DURATION", "RUN ATTEMPT", "NAME"]
     pt.align["REPO"] = 'l'
     pt.align["NAME"] = 'l'
 
     for repo in repos:
-        data = runner.run_list_active(repo).get('workflow_runs', {})
+        data = runner.run_list_active(
+            repo, args.status).get('workflow_runs', {})
         for wf_run in data:
             created_at = datetime.datetime.strptime(
                 wf_run.get('created_at', '0000-00-00T00:00:00Z'),
                 '%Y-%m-%dT%H:%M:%SZ')
             pt.add_row([
                 wf_run.get('repository', {}).get('full_name', '<not found>'),
+                wf_run.get('id', '<not found>'),
                 wf_run.get('status', '<not found>'),
                 wf_run.get('event', '<not found>'),
                 wf_run.get('created_at', '<not found>'),
@@ -612,6 +615,14 @@ def parse_args():
     run_list_active_parser.add_argument("--repo", help="repo name")
     run_list_active_parser.add_argument(
         '--repo-filter', help="filter on repo name")
+    run_list_active_parser.add_argument(
+        '--all-repos', help="all repos in the org",
+        action=argparse.BooleanOptionalAction)
+    run_list_active_parser.add_argument(
+        "--status",
+        help="Status to check, for completed use `run-list-complet`",
+        choices=['queued', 'in_progress'],
+        default="queued")
     run_list_active_parser.set_defaults(func=handle_action_run_active_list)
 
     run_list_complete_parser = subparser_action.add_parser(

@@ -115,11 +115,11 @@ class GhRunner:
         return [" ".join(line.decode('utf-8').split()[0:-2])
                 for line in res.stdout.splitlines()]
 
-    def run_list_active(self, repo):
+    def run_list_active(self, repo, status):
         """List active workflow runs (in_progress & queued)"""
         cmd = ["gh", "api", "-H",
                "Accept: application/vnd.github.v3+json",
-               f"/repos/{repo}/actions/runs?status=in_progress&status=queued"]
+               f"/repos/{repo}/actions/runs?status={status}"]
         out = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(out.stdout)
 

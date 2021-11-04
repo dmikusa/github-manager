@@ -25,9 +25,14 @@ def check_requirements():
         return False
 
 
-def load_repos():
+def load_repos(remote_repos=False):
     """Loads a JSON formatted list of repositories to be used by the script"""
-    repos = json.load(open(REPO_CONFIG_LOCATION))
-    if not hasattr(repos, "append") or not hasattr(repos, "__len__"):
-        raise TypeError("Invalid configuration file")
-    return repos
+    if remote_repos:
+        repos = GhRunner().list_repos()
+        return [repo['full_name'] for repo in repos
+                if 'full_name' in repo.keys()]
+    else:
+        repos = json.load(open(REPO_CONFIG_LOCATION))
+        if not hasattr(repos, "append") or not hasattr(repos, "__len__"):
+            raise TypeError("Invalid configuration file")
+        return repos

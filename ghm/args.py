@@ -209,6 +209,80 @@ def handle_action_disable_matching(args):
                     print("        Skipped. Already disabled?")
 
 
+def handle_action_run_active_list(args):
+    runner = GhRunner()
+    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+
+    pt = PrettyTable()
+    pt.field_names = ["REPO", "STATUS", "EVENT", "CREATED AT",
+                      "RUN STARTED AT", "DURATION", "RUN ATTEMPT", "NAME"]
+    pt.align["REPO"] = 'l'
+    pt.align["NAME"] = 'l'
+
+    for repo in repos:
+        data = runner.run_list_active(repo).get('workflow_runs', {})
+        for wf_run in data:
+            created_at = datetime.datetime.strptime(
+                wf_run.get('created_at', '0000-00-00T00:00:00Z'),
+                '%Y-%m-%dT%H:%M:%SZ')
+            pt.add_row([
+                wf_run.get('repository', {}).get('full_name', '<not found>'),
+                wf_run.get('status', '<not found>'),
+                wf_run.get('event', '<not found>'),
+                wf_run.get('created_at', '<not found>'),
+                wf_run.get('run_started_at', '<not found>'),
+                timeago.format(created_at, datetime.datetime.now()),
+                wf_run.get('run_attempt', '<not found>'),
+                wf_run.get('name', '<not found>')])
+
+    print(pt)
+
+
+def handle_action_run_complete_list(args):
+    runner = GhRunner()
+    repos = filter_repos(load_repos(args.all_repos),
+                         args.repo, args.repo_filter)
+    data = []
+    for repo in repos:
+        repo_data = runner.run_list_complete(repo, args.limit)
+        data.extend(repo_data)
+
+    print(",".join([
+        "repo",
+        "status",
+        "event",
+        "created_at",
+        "run_started_at",
+        "updated_at",
+        "queue_duration",
+        "run_duration",
+        "total_duration",
+        "run_attempt",
+        "name"]))
+    for row in data:
+        created_at = datetime.datetime.strptime(
+            row.get('created_at', '0000-00-00T00:00:00Z'),
+            '%Y-%m-%dT%H:%M:%SZ')
+        run_started_at = datetime.datetime.strptime(
+            row.get('run_started_at', '0000-00-00T00:00:00Z'),
+            '%Y-%m-%dT%H:%M:%SZ')
+        updated_at = datetime.datetime.strptime(
+            row.get('updated_at', '0000-00-00T00:00:00Z'),
+            '%Y-%m-%dT%H:%M:%SZ')
+        print(",".join([
+            row.get('repository', {}).get('full_name', '<not found>'),
+            row.get('status', '<not found>'),
+            row.get('event', '<not found>'),
+            row.get('created_at', '0000-00-00T00:00:00Z'),
+            row.get('run_started_at', '0000-00-00T00:00:00Z'),
+            row.get('updated_at', '0000-00-00T00:00:00Z'),
+            str((run_started_at - created_at).seconds),
+            str((updated_at - run_started_at).seconds),
+            str((updated_at - created_at).seconds),
+            str(row.get('run_attempt', '<not found>')),
+            row.get('name', '<not found>')]))
+
+
 def handle_pr_merge(args):
     runner = GhRunner()
     repos = filter_repos(load_repos(), args.repo, args.repo_filter)
@@ -530,6 +604,29 @@ def parse_args():
     disable_matching_parser.add_argument(
         '--repo-filter', help="filter on repo name")
     disable_matching_parser.set_defaults(func=handle_action_disable_matching)
+
+    run_list_active_parser = subparser_action.add_parser(
+        "run-list-active", help="List active workflow runs")
+    run_list_active_parser.add_argument(
+        "--filter", help="regex filter for workflow name")
+    run_list_active_parser.add_argument("--repo", help="repo name")
+    run_list_active_parser.add_argument(
+        '--repo-filter', help="filter on repo name")
+    run_list_active_parser.set_defaults(func=handle_action_run_active_list)
+
+    run_list_complete_parser = subparser_action.add_parser(
+        "run-list-complete", help="List complete workflow runs")
+    run_list_complete_parser.add_argument(
+        "--filter", help="regex filter for workflow name")
+    run_list_complete_parser.add_argument("--repo", help="repo name")
+    run_list_complete_parser.add_argument(
+        '--repo-filter', help="filter on repo name")
+    run_list_complete_parser.add_argument('--limit', help="result set limit",
+                                          type=int, default="500")
+    run_list_complete_parser.add_argument(
+        '--all-repos', help="all repos in the org",
+        action=argparse.BooleanOptionalAction)
+    run_list_complete_parser.set_defaults(func=handle_action_run_complete_list)
 
     list_parser = subparser_release.add_parser(
         "list", help="list releases and their notes")

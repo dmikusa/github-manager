@@ -232,6 +232,7 @@ def handle_action_run_active_list(args):
                       "RUN STARTED AT", "DURATION", "RUN ATTEMPT", "NAME"]
     pt.align["REPO"] = 'l'
     pt.align["NAME"] = 'l'
+    pt.sortby = "CREATED AT"
 
     for repo in repos:
         data = runner.run_list_active(
@@ -247,7 +248,7 @@ def handle_action_run_active_list(args):
                 wf_run.get('event', '<not found>'),
                 wf_run.get('created_at', '<not found>'),
                 wf_run.get('run_started_at', '<not found>'),
-                timeago.format(created_at, datetime.datetime.now()),
+                timeago.format(created_at, datetime.datetime.utcnow()),
                 wf_run.get('run_attempt', '<not found>'),
                 wf_run.get('name', '<not found>')])
 

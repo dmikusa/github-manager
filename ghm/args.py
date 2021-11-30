@@ -2,6 +2,7 @@ import argparse
 import re
 import timeago
 import datetime
+import time
 from prettytable import PrettyTable
 from .runner import GhRunner
 from .utils import load_repos, REPO_CONFIG_LOCATION, fetch_buildpack_toml
@@ -97,13 +98,15 @@ def handle_open(args):
     GhRunner().pr_open(args.repo, args.number)
 
 
-def _run_workflow(runner, repo, filter):
+def _run_workflow(runner, repo, filter, batch_size, batch_pause):
     pattern = re.compile(filter)
 
+    num_run = 0
     workflows = runner.workflow_list(repo)
     for workflow in workflows:
         m = pattern.match(workflow)
         if filter is None or m:
+            num_run += 1
             print(f"    Running {repo} -> {workflow}")
             try:
                 stdout, stderr = runner.workflow_run(repo, workflow)
@@ -116,6 +119,11 @@ def _run_workflow(runner, repo, filter):
                 if not errMsg.startswith(NOT_RUNNABLE):
                     raise ex
                 print(f"        Skipped {repo}/{workflow}, not runnable")
+            if num_run % batch_size == 0:
+                print("    *** Batch Submitted - Pausing ***")
+                time.sleep(batch_pause)
+                num_run = 0
+    return num_run
 
 
 def handle_action_run(args):
@@ -124,9 +132,14 @@ def handle_action_run(args):
 
 def handle_action_run_matching(args):
     runner = GhRunner()
+    num_run = 0
     repos = filter_repos(load_repos(), args.repo, args.repo_filter)
     for repo in repos:
-        _run_workflow(runner, repo, args.filter)
+        num_run += _run_workflow(runner, repo, args.filter,
+                                 args.batch_size, args.batch_pause)
+        if num_run % args.batch_size == 0:
+            print("    *** Batch Submitted - Pausing ***")
+            time.sleep(args.batch_pause)
 
 
 def _rerun_failed(runner, pr, repo):
@@ -568,6 +581,13 @@ def parse_args():
     run_matching_parser.add_argument("--repo", help="repo name")
     run_matching_parser.add_argument(
         '--repo-filter', help="filter on repo name")
+    run_matching_parser.add_argument(
+        '--batch-size', help="Size of batch to process before pausing",
+        type=int)
+    run_matching_parser.add_argument(
+        '--batch-pause',
+        help="Amount of time in seconds to pause between batches",
+        type=float)
     run_matching_parser.set_defaults(func=handle_action_run_matching)
 
     rerun_parser = subparser_action.add_parser(

@@ -119,7 +119,7 @@ def _run_workflow(runner, repo, filter, batch_size, batch_pause):
                 if not errMsg.startswith(NOT_RUNNABLE):
                     raise ex
                 print(f"        Skipped {repo}/{workflow}, not runnable")
-            if num_run % batch_size == 0:
+            if batch_size is not None and num_run % batch_size == 0:
                 print("    *** Batch Submitted - Pausing ***")
                 time.sleep(batch_pause)
                 num_run = 0
@@ -137,7 +137,7 @@ def handle_action_run_matching(args):
     for repo in repos:
         num_run += _run_workflow(runner, repo, args.filter,
                                  args.batch_size, args.batch_pause)
-        if num_run % args.batch_size == 0:
+        if args.batch_size is not None and num_run % args.batch_size == 0:
             print("    *** Batch Submitted - Pausing ***")
             time.sleep(args.batch_pause)
 

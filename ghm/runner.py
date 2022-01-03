@@ -34,7 +34,8 @@ class GhRunner:
         return json.loads(out.stdout)
 
     @cache
-    def pr_list(self, repo, filter=None, merge_state=None):
+    def pr_list(self, repo,
+                filter=None, merge_state=None, review_decision=None):
         """List PRs for a repo
 
         Given a repo and an optional filter, return the list of current PRs.
@@ -45,6 +46,15 @@ class GhRunner:
                "--json", self._list_json_fields()]
         if filter:
             cmd.extend(["--search", filter])
+        if review_decision:
+            op = "=="
+            if review_decision.startswith('!'):
+                op = "!="
+                review_decision = review_decision[1:]
+            cmd.extend(
+                ['-q',
+                 """[.[] | select(.reviewDecision {} "{}") ]""".format(
+                     op, review_decision.upper())])
         if merge_state:
             op = "=="
             if merge_state.startswith('!'):

@@ -65,7 +65,8 @@ def handle_pr_list(args):
         "AUTHOR",
         "TITLE"))
     for repo in repos:
-        prs = runner.pr_list(repo, args.filter, args.merge_state)
+        prs = runner.pr_list(
+            repo, args.filter, args.merge_state, args.review_decision)
         for pr in prs:
             print(cols.format(
                 repo,
@@ -511,9 +512,13 @@ def parse_args():
         "--merge-state",
         help="blocked, clean or draft. Prefix with `!` to negate.",
         choices=['blocked', '!blocked', 'clean', '!clean', 'draft', '!draft'])
+    list_parser.add_argument(
+        "--review-decision",
+        help="blocked, clean or draft. Prefix with `!` to negate.",
+        choices=['commented', '!commented', 'changes_requested',
+                 '!changes_requested', 'approved', '!approved'])
     list_parser.add_argument('--repo', help="repo name")
     list_parser.add_argument('--repo-filter', help="filter on repo name")
-
     list_parser.set_defaults(func=handle_pr_list)
 
     approve_parser = subparser_pr.add_parser(

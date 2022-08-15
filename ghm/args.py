@@ -19,8 +19,7 @@ def check_run_ok(s):
 
 
 def check_status_context(s):
-    return s['__typename'] == 'StatusContext' and s['status'] == "" and \
-        s['conclusion'] == "" and s['state'] == "SUCCESS"
+    return s['__typename'] == 'StatusContext' and s['state'] == "SUCCESS"
 
 
 def check_status_ok(s):

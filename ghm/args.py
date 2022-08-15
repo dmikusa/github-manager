@@ -1,10 +1,13 @@
 import argparse
+import hashlib
 import re
+import subprocess
 import timeago
 import datetime
 import time
+import os
 from prettytable import PrettyTable
-from .runner import GhRunner
+from .runner import GhRunner, GitRunner
 from .utils import load_repos, REPO_CONFIG_LOCATION, fetch_buildpack_toml
 from .cache import Cache
 
@@ -96,6 +99,66 @@ def handle_pr_approve(args):
 
 def handle_open(args):
     GhRunner().pr_open(args.repo, args.number)
+
+
+def handle_pr_create(args):
+    gr = GitRunner()
+    ghr = GhRunner()
+    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+    for repo in repos:
+        repo_path = os.path.join(args.workdir, repo)
+
+        if os.path.exists(repo_path):
+            # repo exists, clean & update it
+            gr.cwd(repo_path)
+            gr.clean()
+            gr.checkout_branch('main')
+            gr.reset_hard("origin/main")
+            gr.pull()
+        else:
+            # repo doesn't exist, clone it
+            repo_parent = os.path.dirname(repo_path)
+            os.makedirs(repo_parent, exist_ok=True)
+            gr.cwd(repo_parent)
+            repo_url = f"git@github.com:{repo}.git"
+            gr.clone(repo_url)
+            gr.cwd(repo_path)
+
+        # check out branch & make changes
+        branch = _branch_name(args.script)
+        gr.checkout_new_branch(branch)
+        _run_script(repo_path, args.script)
+
+        # add & commit any changes
+        gr.add(".")
+        gr.commit(args.title, args.body)
+        gr.push(branch)
+
+        # create a pull request
+        ghr.pr_create(repo_path, args.label)
+
+
+def _branch_name(script):
+    h = hashlib.sha256(open(script).read().encode('utf-8'))
+    return f"ghm-pr-{h.hexdigest()[0:8]}"
+
+
+def _run_script(cwd, script):
+    try:
+        subprocess.run(
+            os.path.realpath(script),
+            capture_output=True,
+            check=True,
+            cwd=cwd)
+    except subprocess.CalledProcessError as ex:
+        print(f"Error running script: {ex.cmd}")
+        print(f"Exit Code: {ex.returncode}")
+        print()
+        print("STDOUT:")
+        print(ex.stdout)
+        print()
+        print("STDERR:")
+        print(ex.stderr)
 
 
 def _run_workflow(runner, repo, filter, batch_size, batch_pause):
@@ -481,6 +544,22 @@ def single_yes_or_no_question(question, default_no=True):
         return False if default_no else True
 
 
+def path_exists(p):
+    if os.path.isfile(p):
+        return p
+    else:
+        raise argparse.ArgumentTypeError(f"{p} must exist")
+
+
+def label_valid(label):
+    if label is not None and \
+            (label.startswith('semver:') or label.startswith('type:')):
+        return label
+    else:
+        raise argparse.ArgumentTypeError(
+            f"{label} must start with 'semver:' or 'type:'")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Manage many Github repos in an efficient way")
@@ -570,6 +649,23 @@ def parse_args():
         "repo", help="repo where issue exists", type=str)
     open_parser.add_argument("number", help="PR number", type=int)
     open_parser.set_defaults(func=handle_open)
+
+    create_parser = subparser_pr.add_parser(
+        "create", help="create a PR across all of the repos")
+    create_parser.add_argument('--repo', help="repo name")
+    create_parser.add_argument('--repo-filter', help="filter on repo name")
+    create_parser.add_argument('--title', help="PR title")
+    create_parser.add_argument('--body', help="PR body")
+    create_parser.add_argument(
+        '--workdir', help='location to do temporary work', default='.ghm-work')
+    create_parser.add_argument('--script',
+                               help="script to run against each repo",
+                               type=path_exists)
+    create_parser.add_argument('--label',
+                               help="labels to apply (space separated list)",
+                               nargs='*',
+                               type=label_valid)
+    create_parser.set_defaults(func=handle_pr_create)
 
     run_parser = subparser_action.add_parser(
         "run", help="Run actions for a repo")

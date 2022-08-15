@@ -3,3 +3,5 @@
 .envrc
 .history
 __pycache__
+.ghm-work
+.DS_Store

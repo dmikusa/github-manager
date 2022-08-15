@@ -85,6 +85,12 @@ class GhRunner:
         subprocess.run(cmd, capture_output=True, check=True)
 
     @invalidate
+    def pr_create(self, repo_path, labels):
+        """Create a PR"""
+        cmd = ["gh", "pr", "create", "--fill"]
+        subprocess.run(cmd, cwd=repo_path, capture_output=True, check=True)
+
+    @invalidate
     def pr_merge(self, repo, number, admin):
         """Merge the PR"""
         cmd = ["gh", "pr", "merge", "-R", repo, str(number), "-m"]
@@ -232,3 +238,66 @@ class GhRunner:
                              for item in matches if item[1] == 'next']
                 return len(next_link) == 1 and int(next_link[0]) or -1
         return -1
+
+
+class GitRunner:
+    def __init__(self, cwd=None):
+        self._cwd = cwd
+
+    def __run(self, cmd):
+        full_cmd = ["git", "-C", self._cwd, *cmd]
+        res = subprocess.run(full_cmd, capture_output=True, check=True)
+        return (res.stdout, res.stderr)
+
+    def cwd(self, cwd):
+        self._cwd = cwd
+        return self
+
+    def clone(self, repo):
+        """Clone a repo"""
+        cmd = ["clone", repo]
+        return self.__run(cmd)
+
+    def reset_hard(self, branch):
+        """Reset hard to the given branch"""
+        cmd = ["reset", "--hard", branch]
+        return self.__run(cmd)
+
+    def clean(self):
+        """Clean up any untracked files"""
+        cmd = ["clean", "-df"]
+        return self.__run(cmd)
+
+    def pull(self):
+        """Pull latest changes"""
+        cmd = ["pull"]
+        return self.__run(cmd)
+
+    def push(self, branch):
+        """Push commits"""
+        cmd = ["push", "-u", "origin", branch]
+        return self.__run(cmd)
+
+    def status(self):
+        """Fetch git status"""
+        cmd = ["status"]
+        return self.__run(cmd)
+
+    def add(self, paths):
+        """Add modified files"""
+        cmd = ["add", *paths]
+        return self.__run(cmd)
+
+    def commit(self, title, body):
+        """Commit staged changes"""
+        msg = title + "\n\n" + body
+        cmd = ["commit", "-m", msg]
+        return self.__run(cmd)
+
+    def checkout_branch(self, branch):
+        cmd = ["checkout", branch]
+        return self.__run(cmd)
+
+    def checkout_new_branch(self, branch):
+        cmd = ["checkout", "-b", branch]
+        return self.__run(cmd)

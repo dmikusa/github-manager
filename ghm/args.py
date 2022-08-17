@@ -115,6 +115,9 @@ def handle_pr_create(args):
             gr.checkout_branch('main')
             gr.reset_hard("origin/main")
             gr.pull()
+            if not _is_branch_clean(gr):
+                raise RuntimeError(
+                    f"branch at {repo_path} has unclean working tree")
         else:
             # repo doesn't exist, clone it
             repo_parent = os.path.dirname(repo_path)
@@ -128,6 +131,9 @@ def handle_pr_create(args):
         branch = _branch_name(args.script)
         gr.checkout_new_branch(branch)
         _run_script(repo_path, args.script)
+        if _is_branch_clean(gr):
+            print(f"Skipping {repo} which was not modified by {args.script}")
+            return  # nothing to commit
 
         # add & commit any changes
         gr.add(".")
@@ -136,6 +142,11 @@ def handle_pr_create(args):
 
         # create a pull request
         ghr.pr_create(repo_path, args.label)
+
+
+def _is_branch_clean(gr):
+    stdout = gr.status()[0].decode('utf-8').strip()
+    return stdout.endswith('nothing to commit, working tree clean')
 
 
 def _branch_name(script):

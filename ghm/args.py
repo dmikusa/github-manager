@@ -135,8 +135,8 @@ def handle_pr_create(args):
         gr.checkout_new_branch(branch)
         _run_script(repo_path, args.script)
         if _is_branch_clean(gr):
-            print(f"Skipping {repo} which was not modified by {args.script}")
-            return  # nothing to commit
+            print(f"    Skipping {repo} which was not modified by {args.script}")
+            continue # nothing to commit
 
         # add & commit any changes
         gr.add(".")

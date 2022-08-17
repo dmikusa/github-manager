@@ -1,3 +1,4 @@
+from itertools import chain
 import subprocess
 import json
 import re
@@ -88,6 +89,9 @@ class GhRunner:
     def pr_create(self, repo_path, labels):
         """Create a PR"""
         cmd = ["gh", "pr", "create", "--fill"]
+        labels = list(chain(*[("-l", label) for label in labels]))
+        if len(labels) > 0:
+            cmd.extend(labels)
         subprocess.run(cmd, cwd=repo_path, capture_output=True, check=True)
 
     @invalidate

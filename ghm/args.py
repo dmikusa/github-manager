@@ -104,8 +104,11 @@ def handle_open(args):
 def handle_pr_create(args):
     gr = GitRunner()
     ghr = GhRunner()
+
+    print("Creating PRs...")
     repos = filter_repos(load_repos(), args.repo, args.repo_filter)
     for repo in repos:
+        print(f"  {repo}")
         repo_path = os.path.join(args.workdir, repo)
 
         if os.path.exists(repo_path):
@@ -166,10 +169,11 @@ def _run_script(cwd, script):
         print(f"Exit Code: {ex.returncode}")
         print()
         print("STDOUT:")
-        print(ex.stdout)
+        print(ex.stdout.decode('utf-8'))
         print()
         print("STDERR:")
-        print(ex.stderr)
+        print(ex.stderr.decode('utf-8'))
+        raise RuntimeError('script execution failed, see errors above')
 
 
 def _run_workflow(runner, repo, filter, batch_size, batch_pause):

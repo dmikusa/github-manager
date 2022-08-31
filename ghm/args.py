@@ -134,13 +134,21 @@ def handle_pr_create(args):
         branch = _branch_name(args.script)
         gr.checkout_new_branch(branch)
         _run_script(repo_path, args.script)
-        if _is_branch_clean(gr):
-            print(f"    Skipping {repo} which was not modified by {args.script}")
-            continue # nothing to commit
+        if args.title is not None or args.body is not None:
+            if _is_branch_clean(gr):
+                print(f"    Skipping {repo} which was not"
+                      f" modified by {args.script}")
+                continue  # nothing to commit
 
-        # add & commit any changes
-        gr.add(".")
-        gr.commit(args.title, args.body)
+            # add & commit any changes
+            gr.add(".")
+            gr.commit(args.title, args.body)
+        else:
+            if _is_branch_clean(gr):
+                print(f"    Skipping {repo} which was not"
+                      f" modified by {args.script}")
+                continue  # nothing to commit
+
         gr.push(branch)
 
         # create a pull request

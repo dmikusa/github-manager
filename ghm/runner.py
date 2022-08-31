@@ -294,7 +294,9 @@ class GitRunner:
 
     def commit(self, title, body):
         """Commit staged changes"""
-        msg = title + "\n\n" + body
+        msg = title
+        if body is not None:
+            msg += "\n\n" + body
         cmd = ["commit", "-m", msg]
         return self.__run(cmd)
 

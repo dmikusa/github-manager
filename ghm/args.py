@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import json
 import re
 import subprocess
 import timeago
@@ -47,9 +48,21 @@ def filter_repos(repos, repo, filter=None):
     return result
 
 
-def handle_repos(args):
+def handle_repos_local(args):
     print(f"Repos configured in [{REPO_CONFIG_LOCATION}]")
     print("\t" + "\n\t".join(load_repos()))
+
+
+def handle_repos_remote(args):
+    repos = filter_repos(
+        load_repos(remote_repos=True, org=args.org),
+        args.repo,
+        args.repo_filter)
+    if not args.json:
+        print("Repos available remotely")
+        print("\t" + "\n\t".join(repos))
+    else:
+        print(json.dumps(repos, indent=2))
 
 
 def handle_pr_list(args):
@@ -600,8 +613,26 @@ def parse_args():
         description="Manage many Github repos in an efficient way")
 
     subparsers = parser.add_subparsers()
-    subparsers.add_parser(
-        "repos", help="list configured repos").set_defaults(func=handle_repos)
+
+    subparser_repos = subparsers.add_parser(
+        "repos", help="manage repos").add_subparsers()
+
+    subparser_repos.add_parser(
+        "list-local",
+        help="list configured local repos"
+    ).set_defaults(func=handle_repos_local)
+
+    subparser_repos_list_remote = subparser_repos.add_parser(
+        "list-remote", help="list all remote repos"
+    )
+    subparser_repos_list_remote.add_argument(
+        '--org', help="Github org to search")
+    subparser_repos_list_remote.add_argument(
+        "--json", help="output in json", action=argparse.BooleanOptionalAction)
+    subparser_repos_list_remote.add_argument('--repo', help="repo name")
+    subparser_repos_list_remote.add_argument(
+        "--repo-filter", help="filter on repo name")
+    subparser_repos_list_remote.set_defaults(func=handle_repos_remote)
 
     subparser_cache = subparsers.add_parser(
         "cache", help="manage cache")

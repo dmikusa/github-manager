@@ -212,21 +212,24 @@ class GhRunner:
         res = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(res.stdout)
 
-    def list_repos(self):
+    def list_repos(self, org=None):
         """List all the repos in the org"""
         data = []
-        (next_page, page_data) = self._fetch_list_repos_page(1)
+        (next_page, page_data) = self._fetch_list_repos_page(1, org=org)
         data.extend(page_data)
         while next_page > 0:
-            (next_page, page_data) = self._fetch_list_repos_page(next_page)
+            (next_page, page_data) = self._fetch_list_repos_page(
+                next_page, org=org)
             data.extend(page_data)
         return data
 
-    def _fetch_list_repos_page(self, page):
+    def _fetch_list_repos_page(self, page, org=None):
         """Fetch a single page of results"""
+        if org is None:
+            org = 'paketo-buildpacks'
         cmd = ["gh", "api", "-i", "-H",
                "Accept: application/vnd.github.v3+json",
-               f"/orgs/paketo-buildpacks/repos?page={page}&per_page=100"]
+               f"/orgs/{org}/repos?page={page}&per_page=100"]
         out = subprocess.run(cmd, capture_output=True, check=True, text=True)
         headers, body = out.stdout.split('\n\n', 1)
         return (self._next_page(headers), json.loads(body))

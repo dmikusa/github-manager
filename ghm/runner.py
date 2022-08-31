@@ -307,3 +307,7 @@ class GitRunner:
     def checkout_new_branch(self, branch):
         cmd = ["checkout", "-b", branch]
         return self.__run(cmd)
+
+    def rev_parse(self, branch):
+        cmd = ["rev-parse", branch]
+        return self.__run(cmd)

@@ -107,7 +107,7 @@ def handle_pr_create(args):
 
     print("Creating PRs...")
     repos = filter_repos(load_repos(), args.repo, args.repo_filter)
-    for repo in repos:
+    for num_run, repo in enumerate(repos):
         print(f"  {repo}")
         repo_path = os.path.join(args.workdir, repo)
 
@@ -143,21 +143,33 @@ def handle_pr_create(args):
             # add & commit any changes
             gr.add(".")
             gr.commit(args.title, args.body)
+            gr.push(branch)
         else:
-            if _is_branch_clean(gr):
+            if not _was_commit_made(gr, branch):
                 print(f"    Skipping {repo} which was not"
                       f" modified by {args.script}")
-                continue  # nothing to commit
-
-        gr.push(branch)
+                continue  # nothing was committed
+            gr.push(branch)
 
         # create a pull request
         ghr.pr_create(repo_path, args.label)
+
+        if args.batch_size is not None and \
+                (num_run + 1) % args.batch_size == 0:
+            print("    *** Batch Submitted - Pausing ***")
+            time.sleep(args.batch_pause)
+            num_run = 0
 
 
 def _is_branch_clean(gr):
     stdout = gr.status()[0].decode('utf-8').strip()
     return stdout.endswith('nothing to commit, working tree clean')
+
+
+def _was_commit_made(gr, branch):
+    head = gr.rev_parse("main")
+    br = gr.rev_parse(branch)
+    return head != br
 
 
 def _branch_name(script):
@@ -688,6 +700,13 @@ def parse_args():
                                help="labels to apply (space separated list)",
                                nargs='*',
                                type=label_valid)
+    create_parser.add_argument(
+        '--batch-size', help="Size of batch to process before pausing",
+        type=int)
+    create_parser.add_argument(
+        '--batch-pause',
+        help="Amount of time in seconds to pause between batches",
+        type=float)
     create_parser.set_defaults(func=handle_pr_create)
 
     run_parser = subparser_action.add_parser(

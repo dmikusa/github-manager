@@ -192,20 +192,27 @@ def _branch_name(script):
 
 def _run_script(cwd, script):
     try:
-        subprocess.run(
+        proc = subprocess.run(
             os.path.realpath(script),
             capture_output=True,
+            text=True,
             check=True,
             cwd=cwd)
+        if len(proc.stdout) > 0:
+            print("STDOUT:")
+            print(proc.stdout)
+        if len(proc.stderr) > 0:
+            print("STDERR:")
+            print(proc.stderr)
     except subprocess.CalledProcessError as ex:
         print(f"Error running script: {ex.cmd}")
         print(f"Exit Code: {ex.returncode}")
         print()
         print("STDOUT:")
-        print(ex.stdout.decode('utf-8'))
+        print(ex.stdout)
         print()
         print("STDERR:")
-        print(ex.stderr.decode('utf-8'))
+        print(ex.stderr)
         raise RuntimeError('script execution failed, see errors above')
 
 

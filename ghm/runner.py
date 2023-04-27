@@ -95,9 +95,15 @@ class GhRunner:
         subprocess.run(cmd, cwd=repo_path, capture_output=True, check=True)
 
     @invalidate
-    def pr_merge(self, repo, number, admin):
+    def pr_merge(self, repo, number, admin, merge_type):
         """Merge the PR"""
-        cmd = ["gh", "pr", "merge", "-R", repo, str(number), "-m"]
+        cmd = ["gh", "pr", "merge", "-R", repo, str(number)]
+        if merge_type == "merge":
+            cmd.append("-m")
+        elif merge_type == "squash":
+            cmd.append("-s")
+        elif merge_type == "rebase":
+            cmd.append("-r")
         if admin:
             cmd.append("--admin")
         res = subprocess.run(cmd, capture_output=True, check=True)

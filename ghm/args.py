@@ -436,7 +436,7 @@ def handle_pr_merge(args):
                 print(f"    Merging {repo} -> {pr['number']} [{pr['title']}]")
             try:
                 stdout, stderr = runner.pr_merge(
-                    repo, pr['number'], args.admin)
+                    repo, pr['number'], args.admin, args.merge_type)
                 if stderr:
                     print(stderr)
                 if stdout:
@@ -699,6 +699,10 @@ def parse_args():
     merge_parser.add_argument("--with-approve",
                               help="approve PR before merging",
                               action=argparse.BooleanOptionalAction)
+    merge_parser.add_argument("--merge-type",
+                              help="Defaults to merge, others options are squash or rebase",
+                              choices=['merge', 'squash', 'rebase'],
+                              default='merge')
     merge_parser.set_defaults(func=handle_pr_merge)
 
     update_br_parser = subparser_pr.add_parser(

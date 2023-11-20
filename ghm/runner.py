@@ -36,7 +36,7 @@ class GhRunner:
 
     @cache
     def pr_list(self, repo,
-                filter=None, merge_state=None, review_decision=None):
+                filter=None, merge_state=None, review_decision=None, author=None):
         """List PRs for a repo
 
         Given a repo and an optional filter, return the list of current PRs.
@@ -47,6 +47,8 @@ class GhRunner:
                "--json", self._list_json_fields()]
         if filter:
             cmd.extend(["--search", filter])
+        if author:
+            cmd.extend(["--author", author])
         if review_decision:
             op = "=="
             if review_decision.startswith('!'):

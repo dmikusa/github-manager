@@ -81,7 +81,11 @@ def handle_pr_list(args):
         "TITLE"))
     for repo in repos:
         prs = runner.pr_list(
-            repo, args.filter, args.merge_state, args.review_decision)
+            repo,
+            filter=args.filter,
+            merge_state=args.merge_state,
+            review_decision=args.review_decision,
+            author=args.author)
         for pr in prs:
             print(cols.format(
                 repo,
@@ -100,7 +104,11 @@ def handle_pr_approve(args):
     runner = GhRunner()
     repos = filter_repos(load_repos(), args.repo, args.repo_filter)
     for repo in repos:
-        prs = runner.pr_list(repo, args.filter, args.merge_state)
+        prs = runner.pr_list(repo,
+                             filter=args.filter,
+                             merge_state=args.merge_state,
+                             review_decision=args.review_decision,
+                             author=args.author)
         for pr in prs:
             print(f"    Approving {repo} -> {pr['number']} [{pr['title']}]")
             stdout, stderr = runner.pr_approve(repo, pr['number'])
@@ -425,7 +433,11 @@ def handle_pr_merge(args):
     for repo in repos:
         if break_merging:
             break
-        prs = runner.pr_list(repo, args.filter, args.merge_state)
+        prs = runner.pr_list(repo,
+                             filter=args.filter,
+                             merge_state=args.merge_state,
+                             review_decision=args.review_decision,
+                             author=args.author)
         for pr in prs:
             if args.with_approve:
                 print(
@@ -460,7 +472,7 @@ def handle_pr_branch_update(args):
     runner = GhRunner()
     repos = filter_repos(load_repos(), args.repo, args.repo_filter)
     for repo in repos:
-        prs = runner.pr_list(repo, args.filter, args.merge_state)
+        prs = runner.pr_list(repo, args.filter, args.merge_state, args.author)
         for pr in prs:
             if pr['mergeStateStatus'] == 'BEHIND' or args.force:
                 print(f"    Updating branch {repo} -> "
@@ -670,6 +682,7 @@ def parse_args():
                  '!changes_requested', 'approved', '!approved'])
     list_parser.add_argument('--repo', help="repo name")
     list_parser.add_argument('--repo-filter', help="filter on repo name")
+    list_parser.add_argument('--author', help="filter on author")
     list_parser.set_defaults(func=handle_pr_list)
 
     approve_parser = subparser_pr.add_parser(
@@ -679,8 +692,14 @@ def parse_args():
         "--merge-state",
         help="blocked, clean or draft. Prefix with `!` to negate.",
         choices=['blocked', '!blocked', 'clean', '!clean', 'draft', '!draft'])
+    approve_parser.add_argument(
+        "--review-decision",
+        help="blocked, clean or draft. Prefix with `!` to negate.",
+        choices=['commented', '!commented', 'changes_requested',
+                 '!changes_requested', 'approved', '!approved'])
     approve_parser.add_argument('--repo', help="repo name")
     approve_parser.add_argument('--repo-filter', help="filter on repo name")
+    approve_parser.add_argument('--author', help="filter on author")
     approve_parser.set_defaults(func=handle_pr_approve)
 
     merge_parser = subparser_pr.add_parser("merge", help="merge matching PRs")
@@ -689,6 +708,11 @@ def parse_args():
         "--merge-state",
         help="blocked, clean or draft. Prefix with `!` to negate.",
         choices=['blocked', '!blocked', 'clean', '!clean', 'draft', '!draft'])
+    merge_parser.add_argument(
+        "--review-decision",
+        help="blocked, clean or draft. Prefix with `!` to negate.",
+        choices=['commented', '!commented', 'changes_requested',
+                 '!changes_requested', 'approved', '!approved'])
     merge_parser.add_argument("--repo", help="repo name")
     merge_parser.add_argument('--repo-filter', help="filter on repo name")
     merge_parser.add_argument('--admin', help="use admin privileges to merge",
@@ -703,6 +727,7 @@ def parse_args():
                               help="Defaults to merge, others options are squash or rebase",
                               choices=['merge', 'squash', 'rebase'],
                               default='merge')
+    merge_parser.add_argument('--author', help="filter on author")
     merge_parser.set_defaults(func=handle_pr_merge)
 
     update_br_parser = subparser_pr.add_parser(
@@ -714,6 +739,7 @@ def parse_args():
         choices=['blocked', '!blocked', 'clean', '!clean', 'draft', '!draft'])
     update_br_parser.add_argument("--repo", help="repo name")
     update_br_parser.add_argument('--repo-filter', help="filter on repo name")
+    update_br_parser.add_argument('--author', help="filter on author")
     update_br_parser.add_argument(
         '--force',
         help="force update despite merge status",

@@ -852,7 +852,7 @@ def parse_args():
     run_list_active_parser.add_argument(
         "--status",
         help="Status to check, for completed use `run-list-complet`",
-        choices=['queued', 'in_progress'],
+        choices=['queued', 'in_progress', 'failed'],
         default="queued")
     run_list_active_parser.set_defaults(func=handle_action_run_active_list)
 

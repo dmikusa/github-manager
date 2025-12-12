@@ -23,50 +23,76 @@ class GhRunner:
 
     def _list_json_fields(self):
         return ",".join(
-            ["author", "number", "state", "title", "url", "reviewDecision",
-                "statusCheckRollup", "mergeable", "mergeStateStatus"])
+            [
+                "author",
+                "number",
+                "state",
+                "title",
+                "url",
+                "reviewDecision",
+                "statusCheckRollup",
+                "mergeable",
+                "mergeStateStatus",
+            ]
+        )
 
     @cache
     def pr_get(self, repo, number):
         """Get a PR in a given repo by its number"""
-        cmd = ["gh", "pr", "view", "--json",
-               self._list_json_fields(), "-R", repo, str(number)]
+        cmd = [
+            "gh",
+            "pr",
+            "view",
+            "--json",
+            self._list_json_fields(),
+            "-R",
+            repo,
+            str(number),
+        ]
         out = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(out.stdout)
 
     @cache
-    def pr_list(self, repo,
-                filter=None, merge_state=None, review_decision=None, author=None):
+    def pr_list(
+        self, repo, filter=None, merge_state=None, review_decision=None, author=None
+    ):
         """List PRs for a repo
 
         Given a repo and an optional filter, return the list of current PRs.
 
         Filter can be any valid search string like a keyword or Github keys.
         """
-        cmd = ["gh", "pr", "list", "-R", repo,
-               "--json", self._list_json_fields()]
+        cmd = ["gh", "pr", "list", "-R", repo, "--json", self._list_json_fields()]
         if filter:
             cmd.extend(["--search", filter])
         if author:
             cmd.extend(["--author", author])
         if review_decision:
             op = "=="
-            if review_decision.startswith('!'):
+            if review_decision.startswith("!"):
                 op = "!="
                 review_decision = review_decision[1:]
             cmd.extend(
-                ['-q',
-                 """[.[] | select(.reviewDecision {} "{}") ]""".format(
-                     op, review_decision.upper())])
+                [
+                    "-q",
+                    """[.[] | select(.reviewDecision {} "{}") ]""".format(
+                        op, review_decision.upper()
+                    ),
+                ]
+            )
         if merge_state:
             op = "=="
-            if merge_state.startswith('!'):
+            if merge_state.startswith("!"):
                 op = "!="
                 merge_state = merge_state[1:]
             cmd.extend(
-                ['-q',
-                 """[.[] | select(.mergeStateStatus {} "{}") ]""".format(
-                     op, merge_state.upper())])
+                [
+                    "-q",
+                    """[.[] | select(.mergeStateStatus {} "{}") ]""".format(
+                        op, merge_state.upper()
+                    ),
+                ]
+            )
         out = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(out.stdout)
 
@@ -114,11 +140,49 @@ class GhRunner:
     @invalidate
     def pr_update_branch(self, repo, number):
         """Update branch of the PR"""
-        cmd = ["gh", "api", "-X", "PUT", "-H",
-               "Accept: application/vnd.github.lydian-preview+json",
-               f"/repos/{repo}/pulls/{str(number)}/update-branch"]
+        cmd = [
+            "gh",
+            "api",
+            "-X",
+            "PUT",
+            "-H",
+            "Accept: application/vnd.github.lydian-preview+json",
+            f"/repos/{repo}/pulls/{str(number)}/update-branch",
+        ]
         out = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(out.stdout)
+
+    @invalidate
+    def pr_apply_label(self, repo, number, label):
+        """Apply a label to the PRs"""
+        cmd = [
+            "gh",
+            "pr",
+            "edit",
+            str(number),
+            "-R",
+            repo,
+            "--add-label",
+            label,
+        ]
+        out = subprocess.run(cmd, capture_output=True, check=True)
+        return out.stdout
+
+    @invalidate
+    def pr_remove_label(self, repo, number, label):
+        """Remove a label from PRs"""
+        cmd = [
+            "gh",
+            "pr",
+            "edit",
+            str(number),
+            "-R",
+            repo,
+            "--remove-label",
+            label,
+        ]
+        out = subprocess.run(cmd, capture_output=True, check=True)
+        return out.stdout
 
     @cache
     def _fetch_action_job_by_id(self, repo, id):
@@ -131,7 +195,7 @@ class GhRunner:
     def action_run_rerun(self, repo, number):
         """Rerun a failed Github Action"""
         job = self._fetch_action_job_by_id(repo, number)
-        cmd = ["gh", "run", "rerun", "-R", repo, str(job['run_id'])]
+        cmd = ["gh", "run", "rerun", "-R", repo, str(job["run_id"])]
         res = subprocess.run(cmd, capture_output=True, check=True)
         return (res.stdout, res.stderr)
 
@@ -140,14 +204,20 @@ class GhRunner:
         """List all of the workflows"""
         cmd = ["gh", "workflow", "list", "-R", repo]
         res = subprocess.run(cmd, capture_output=True, check=True)
-        return [" ".join(line.decode('utf-8').split()[0:-2])
-                for line in res.stdout.splitlines()]
+        return [
+            " ".join(line.decode("utf-8").split()[0:-2])
+            for line in res.stdout.splitlines()
+        ]
 
     def run_list_active(self, repo, status):
         """List active workflow runs (in_progress & queued)"""
-        cmd = ["gh", "api", "-H",
-               "Accept: application/vnd.github.v3+json",
-               f"/repos/{repo}/actions/runs?status={status}"]
+        cmd = [
+            "gh",
+            "api",
+            "-H",
+            "Accept: application/vnd.github.v3+json",
+            f"/repos/{repo}/actions/runs?status={status}",
+        ]
         out = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(out.stdout)
 
@@ -155,27 +225,28 @@ class GhRunner:
         """List completed workflow runs"""
         data = []
         per_page = (limit > 100) and 100 or limit
-        (next_page, page_data) = self._fetch_run_list_complete_page(
-            repo,
-            1,
-            per_page)
-        data.extend(page_data.get('workflow_runs', []))
+        (next_page, page_data) = self._fetch_run_list_complete_page(repo, 1, per_page)
+        data.extend(page_data.get("workflow_runs", []))
         while next_page > 0 and len(data) < limit:
             (next_page, page_data) = self._fetch_run_list_complete_page(
-                repo,
-                next_page,
-                per_page)
-            data.extend(page_data.get('workflow_runs', []))
+                repo, next_page, per_page
+            )
+            data.extend(page_data.get("workflow_runs", []))
         return data
 
     def _fetch_run_list_complete_page(self, repo, page, per_page):
         """Fetch a single page of results"""
-        cmd = ["gh", "api", "-i", "-H",
-               "Accept: application/vnd.github.v3+json",
-               f"/repos/{repo}/actions/runs?"
-               f"status=completed&page={page}&per_page={per_page}"]
+        cmd = [
+            "gh",
+            "api",
+            "-i",
+            "-H",
+            "Accept: application/vnd.github.v3+json",
+            f"/repos/{repo}/actions/runs?"
+            f"status=completed&page={page}&per_page={per_page}",
+        ]
         out = subprocess.run(cmd, capture_output=True, check=True, text=True)
-        headers, body = out.stdout.split('\n\n', 1)
+        headers, body = out.stdout.split("\n\n", 1)
         return (self._next_page(headers), json.loads(body))
 
     def workflow_run(self, repo, name):
@@ -202,21 +273,31 @@ class GhRunner:
         cmd = ["gh", "api", f"/repos/{repo}/releases"]
         res = subprocess.run(cmd, capture_output=True, check=True)
         for release in json.loads(res.stdout):
-            if release['draft']:
+            if release["draft"]:
                 return release
 
     def fetch_latest_release(self, repo):
         """Fetch the latest 2 releases of a repo"""
         cmd = ["gh", "release", "list", "-R", repo, "-L", "2"]
         res = subprocess.run(cmd, capture_output=True, check=True)
-        return [(line.decode('utf-8').split("\t")[0:])
-                for line in res.stdout.splitlines()]
+        return [
+            (line.decode("utf-8").split("\t")[0:]) for line in res.stdout.splitlines()
+        ]
 
     @invalidate
     def release_publish(self, repo, id, tag):
         """Publish a draft release"""
-        cmd = ["gh", "api", f"/repos/{repo}/releases/{id}",
-               "-X", "PATCH", "-F", "draft=false", "-F", f"tag_name=v{tag}"]
+        cmd = [
+            "gh",
+            "api",
+            f"/repos/{repo}/releases/{id}",
+            "-X",
+            "PATCH",
+            "-F",
+            "draft=false",
+            "-F",
+            f"tag_name=v{tag}",
+        ]
         res = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(res.stdout)
 
@@ -226,31 +307,34 @@ class GhRunner:
         (next_page, page_data) = self._fetch_list_repos_page(1, org=org)
         data.extend(page_data)
         while next_page > 0:
-            (next_page, page_data) = self._fetch_list_repos_page(
-                next_page, org=org)
+            (next_page, page_data) = self._fetch_list_repos_page(next_page, org=org)
             data.extend(page_data)
         return data
 
     def _fetch_list_repos_page(self, page, org=None):
         """Fetch a single page of results"""
         if org is None:
-            org = 'paketo-buildpacks'
-        cmd = ["gh", "api", "-i", "-H",
-               "Accept: application/vnd.github.v3+json",
-               f"/orgs/{org}/repos?page={page}&per_page=100"]
+            org = "paketo-buildpacks"
+        cmd = [
+            "gh",
+            "api",
+            "-i",
+            "-H",
+            "Accept: application/vnd.github.v3+json",
+            f"/orgs/{org}/repos?page={page}&per_page=100",
+        ]
         out = subprocess.run(cmd, capture_output=True, check=True, text=True)
-        headers, body = out.stdout.split('\n\n', 1)
+        headers, body = out.stdout.split("\n\n", 1)
         return (self._next_page(headers), json.loads(body))
 
     def _next_page(self, headers):
-        for i, header in enumerate(headers.split('\n')):
+        for i, header in enumerate(headers.split("\n")):
             if i == 0:
                 continue  # skip first line
-            key, value = header.split(':', 1)
+            key, value = header.split(":", 1)
             if key.strip().lower() == "link":
                 matches = PAGE.findall(value)
-                next_link = [int(item[0])
-                             for item in matches if item[1] == 'next']
+                next_link = [int(item[0]) for item in matches if item[1] == "next"]
                 return len(next_link) == 1 and int(next_link[0]) or -1
         return -1
 

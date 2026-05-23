@@ -250,9 +250,9 @@ def _run_workflow(runner, repo, filter, batch_size, batch_pause):
             try:
                 stdout, stderr = runner.workflow_run(repo, workflow)
                 if stdout:
-                    print(stdout)
+                    print(f"        {stdout.decode('UTF-8').strip()}")
                 if stderr:
-                    print(stderr)
+                    print(f"        {stderr.decode('UTF-8').strip()}")
             except Exception as ex:
                 errMsg = ex.stderr.decode("UTF-8").strip()
                 if not errMsg.startswith(NOT_RUNNABLE):

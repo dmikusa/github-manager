@@ -8,6 +8,8 @@ PAGE = re.compile(r'<.*?page=(\d+)&.*?>; rel="(.*?)",')
 
 
 class GhRunner:
+    skip_cache = False
+
     def __init__(self):
         self._cache = Cache()
         self._cache.load()
@@ -148,7 +150,7 @@ class GhRunner:
         out = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(out.stdout)
 
-    @invalidate
+    @invalidate("pr_list", "pr_get")
     def pr_approve(self, repo, number):
         """Mark a PR as reviewed
 
@@ -165,7 +167,7 @@ class GhRunner:
         cmd = ["gh", "pr", "view", "-R", repo, str(number), "-w"]
         subprocess.run(cmd, capture_output=True, check=True)
 
-    @invalidate
+    @invalidate("pr_list", use_scope=False)
     def pr_create(self, repo_path, labels):
         """Create a PR"""
         cmd = ["gh", "pr", "create", "--fill"]
@@ -174,7 +176,7 @@ class GhRunner:
             cmd.extend(labels)
         subprocess.run(cmd, cwd=repo_path, capture_output=True, check=True)
 
-    @invalidate
+    @invalidate("pr_list", "pr_get")
     def pr_merge(self, repo, number, admin, merge_type):
         """Merge the PR"""
         cmd = ["gh", "pr", "merge", "-R", repo, str(number)]
@@ -202,7 +204,7 @@ class GhRunner:
             return False
         return json.loads(res.stdout).get("enabled", False)
 
-    @invalidate
+    @invalidate("branch_enforce_admins_enabled")
     def branch_enforce_admins_disable(self, repo, branch):
         """Disable enforce_admins for a branch (allow admin bypass)"""
         cmd = [
@@ -214,7 +216,7 @@ class GhRunner:
         ]
         subprocess.run(cmd, capture_output=True, check=True)
 
-    @invalidate
+    @invalidate("branch_enforce_admins_enabled")
     def branch_enforce_admins_enable(self, repo, branch):
         """Enable enforce_admins for a branch (block admin bypass)"""
         cmd = [
@@ -226,7 +228,7 @@ class GhRunner:
         ]
         subprocess.run(cmd, capture_output=True, check=True)
 
-    @invalidate
+    @invalidate("pr_list", "pr_get")
     def pr_update_branch(self, repo, number):
         """Update branch of the PR"""
         cmd = [
@@ -241,7 +243,7 @@ class GhRunner:
         out = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(out.stdout)
 
-    @invalidate
+    @invalidate("pr_list", "pr_get")
     def pr_apply_label(self, repo, number, label):
         """Apply a label to the PRs"""
         cmd = [
@@ -257,7 +259,7 @@ class GhRunner:
         out = subprocess.run(cmd, capture_output=True, check=True)
         return out.stdout
 
-    @invalidate
+    @invalidate("pr_list", "pr_get")
     def pr_remove_label(self, repo, number, label):
         """Remove a label from PRs"""
         cmd = [
@@ -280,7 +282,7 @@ class GhRunner:
         out = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(out.stdout)
 
-    @invalidate
+    @invalidate("_fetch_action_job_by_id")
     def action_run_rerun(self, repo, number):
         """Rerun a failed Github Action"""
         job = self._fetch_action_job_by_id(repo, number)
@@ -373,7 +375,7 @@ class GhRunner:
             (line.decode("utf-8").split("\t")[0:]) for line in res.stdout.splitlines()
         ]
 
-    @invalidate
+    @invalidate("fetch_draft_release")
     def release_publish(self, repo, id, tag):
         """Publish a draft release"""
         cmd = [

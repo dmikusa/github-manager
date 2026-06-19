@@ -804,6 +804,11 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Manage many Github repos in an efficient way"
     )
+    parser.add_argument(
+        "--skip-cache",
+        help="bypass cache for this run",
+        action=argparse.BooleanOptionalAction,
+    )
 
     subparsers = parser.add_subparsers()
 

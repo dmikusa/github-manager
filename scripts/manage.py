@@ -19,6 +19,8 @@ if __name__ == '__main__':
         if not hasattr(res, 'func'):
             parser.print_help()
             sys.exit(-3)
+        if getattr(res, 'skip_cache', False):
+            ghm.GhRunner.skip_cache = True
         res.func(res)
     except CalledProcessError as ex:
         print()

@@ -25,6 +25,7 @@ class GhRunner:
         return ",".join(
             [
                 "author",
+                "baseRefName",
                 "number",
                 "state",
                 "title",
@@ -186,7 +187,44 @@ class GhRunner:
         if admin:
             cmd.append("--admin")
         res = subprocess.run(cmd, capture_output=True, check=True)
-        return (res.stdout, res.stderr)
+        return (res.stdout.decode("utf-8"), res.stderr.decode("utf-8"))
+
+    @cache
+    def branch_enforce_admins_enabled(self, repo, branch):
+        """Check if enforce_admins is enabled for a branch"""
+        cmd = [
+            "gh",
+            "api",
+            f"/repos/{repo}/branches/{branch}/protection/enforce_admins",
+        ]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode != 0:
+            return False
+        return json.loads(res.stdout).get("enabled", False)
+
+    @invalidate
+    def branch_enforce_admins_disable(self, repo, branch):
+        """Disable enforce_admins for a branch (allow admin bypass)"""
+        cmd = [
+            "gh",
+            "api",
+            "--method",
+            "DELETE",
+            f"/repos/{repo}/branches/{branch}/protection/enforce_admins",
+        ]
+        subprocess.run(cmd, capture_output=True, check=True)
+
+    @invalidate
+    def branch_enforce_admins_enable(self, repo, branch):
+        """Enable enforce_admins for a branch (block admin bypass)"""
+        cmd = [
+            "gh",
+            "api",
+            "--method",
+            "POST",
+            f"/repos/{repo}/branches/{branch}/protection/enforce_admins",
+        ]
+        subprocess.run(cmd, capture_output=True, check=True)
 
     @invalidate
     def pr_update_branch(self, repo, number):

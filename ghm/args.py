@@ -69,6 +69,69 @@ def handle_repos_remote(args):
         print(json.dumps(repos, indent=2))
 
 
+def handle_repos_toggle_branch_enforce_admin(args):
+    runner = GhRunner()
+    repos = filter_repos(
+        load_repos(pr_list=args.pr_list), args.repo, args.repo_filter
+    )
+    branch = args.branch or "main"
+    for repo in repos:
+        print(f"Processing repository: {repo}")
+        print("----------------------------------------")
+        try:
+            enabled = runner.branch_enforce_admins_enabled(repo, branch)
+        except Exception:
+            print(f"    Error: Could not fetch branch protection for {repo}/{branch}")
+            print()
+            continue
+
+        if enabled:
+            print(
+                "    Current status: Bypass prevention ENABLED"
+                " (admins cannot bypass)"
+            )
+            print(
+                "    Action: DISABLING bypass prevention"
+                " (allowing admins to bypass)"
+            )
+            try:
+                runner.branch_enforce_admins_disable(repo, branch)
+                print("    Successfully disabled bypass prevention")
+            except Exception:
+                print("    Error: Could not disable bypass prevention")
+        else:
+            print(
+                "    Current status: Bypass prevention DISABLED"
+                " (admins can bypass)"
+            )
+            print(
+                "    Action: ENABLING bypass prevention"
+                " (preventing admin bypass)"
+            )
+            try:
+                runner.branch_enforce_admins_enable(repo, branch)
+                print("    Successfully enabled bypass prevention")
+            except Exception:
+                print("    Error: Could not enable bypass prevention")
+        print()
+    print("All repositories processed!")
+
+
+def handle_repos_list_branch_enforce_admin(args):
+    runner = GhRunner()
+    repos = filter_repos(
+        load_repos(pr_list=args.pr_list), args.repo, args.repo_filter
+    )
+    branch = args.branch or "main"
+    print(f"{'REPO':<45} {'BRANCH':<15} {'ENFORCE_ADMINS':<15}")
+    for repo in repos:
+        try:
+            enabled = runner.branch_enforce_admins_enabled(repo, branch)
+            print(f"{repo:<45} {branch:<15} {str(enabled):<15}")
+        except Exception:
+            print(f"{repo:<45} {branch:<15} {'ERROR':<15}")
+
+
 def handle_pr_list(args):
     runner = GhRunner()
     repos = filter_repos(load_repos(pr_list=args.pr_list), args.repo, args.repo_filter)
@@ -462,10 +525,69 @@ def handle_action_run_complete_list(args):
         )
 
 
+def _merge_repo_prs(runner, repo, prs, args, break_merging):
+    for pr in prs:
+        if break_merging:
+            return True
+        if args.with_approve:
+            print(
+                f"    Approving & Merging {repo} -> "
+                f"{pr['number']} [{pr['title']}]"
+            )
+            runner.pr_approve(repo, pr["number"])
+        else:
+            print(f"    Merging {repo} -> {pr['number']} [{pr['title']}]")
+        try:
+            stdout, stderr = runner.pr_merge(
+                repo, pr["number"], args.admin, args.merge_type
+            )
+            if stderr:
+                print(stderr)
+            if stdout:
+                print(stdout)
+        except Exception as ex:
+            if ex.stderr:
+                print("An error occurred while attempting to merge:")
+                print((ex.stderr).decode())
+            if ex.returncode != 0:
+                if args.skip_failing:
+                    continue
+                if single_yes_or_no_question(
+                    "Do you wish to continue merging?", True
+                ):
+                    continue
+                else:
+                    return True
+    return break_merging
+
+
+def _merge_repo_prs_with_admin(runner, repo, prs, args, break_merging):
+    base_branch = "main"
+    try:
+        pr = runner.pr_get(repo, prs[0]["number"])
+        base_branch = pr.get("baseRefName", "main")
+        if runner.branch_enforce_admins_enabled(repo, base_branch):
+            runner.branch_enforce_admins_disable(repo, base_branch)
+    except Exception:
+        pass
+
+    try:
+        return _merge_repo_prs(runner, repo, prs, args, break_merging)
+    finally:
+        try:
+            runner.branch_enforce_admins_enable(repo, base_branch)
+        except Exception:
+            print(
+                f"    Warning: Could not re-enforce branch protection"
+                f" on {repo}/{base_branch}"
+            )
+
+
 def handle_pr_merge(args):
     runner = GhRunner()
     repos = filter_repos(load_repos(pr_list=args.pr_list), args.repo, args.repo_filter)
     break_merging = False
+
     for repo in repos:
         if break_merging:
             break
@@ -477,37 +599,11 @@ def handle_pr_merge(args):
             author=args.author,
             pr_list=args.pr_list,
         )
-        for pr in prs:
-            if args.with_approve:
-                print(
-                    f"    Approving & Merging {repo} -> "
-                    f"{pr['number']} [{pr['title']}]"
-                )
-                runner.pr_approve(repo, pr["number"])
-            else:
-                print(f"    Merging {repo} -> {pr['number']} [{pr['title']}]")
-            try:
-                stdout, stderr = runner.pr_merge(
-                    repo, pr["number"], args.admin, args.merge_type
-                )
-                if stderr:
-                    print(stderr)
-                if stdout:
-                    print(stdout)
-            except Exception as ex:
-                if ex.stderr:
-                    print("An error occurred while attempting to merge:")
-                    print((ex.stderr).decode())
-                if ex.returncode != 0:
-                    if args.skip_failing:
-                        continue
-                    if single_yes_or_no_question(
-                        "Do you wish to continue merging?", True
-                    ):
-                        continue
-                    else:
-                        break_merging = True
-                        break
+        if not prs:
+            continue
+
+        merge_fn = _merge_repo_prs_with_admin if args.admin else _merge_repo_prs
+        break_merging = merge_fn(runner, repo, prs, args, break_merging) or break_merging
 
 
 def handle_pr_branch_update(args):
@@ -731,6 +827,62 @@ def parse_args():
         "--repo-filter", help="filter on repo name"
     )
     subparser_repos_list_remote.set_defaults(func=handle_repos_remote)
+
+    subparser_repos_list = subparser_repos.add_parser(
+        "list", help="list repo settings"
+    ).add_subparsers()
+
+    subparser_repos_list_branch_enforce_admin = subparser_repos_list.add_parser(
+        "branch-enforce-admin",
+        help="list enforce_admin setting for branch protection",
+    )
+    subparser_repos_list_branch_enforce_admin.add_argument(
+        "--branch",
+        help="branch to check (default: main)",
+        default="main",
+    )
+    subparser_repos_list_branch_enforce_admin.add_argument(
+        "--repo", help="repo name"
+    )
+    subparser_repos_list_branch_enforce_admin.add_argument(
+        "--repo-filter", help="filter on repo name"
+    )
+    subparser_repos_list_branch_enforce_admin.add_argument(
+        "--pr-list",
+        help="path to a file containing PR URLs to act on",
+        type=path_exists,
+    )
+    subparser_repos_list_branch_enforce_admin.set_defaults(
+        func=handle_repos_list_branch_enforce_admin
+    )
+
+    subparser_repos_toggle = subparser_repos.add_parser(
+        "toggle", help="toggle repo settings"
+    ).add_subparsers()
+
+    subparser_repos_toggle_branch_enforce_admin = subparser_repos_toggle.add_parser(
+        "branch-enforce-admin",
+        help="toggle ability to bypass branch protection rules for admin",
+    )
+    subparser_repos_toggle_branch_enforce_admin.add_argument(
+        "--branch",
+        help="branch to toggle (default: main)",
+        default="main",
+    )
+    subparser_repos_toggle_branch_enforce_admin.add_argument(
+        "--repo", help="repo name"
+    )
+    subparser_repos_toggle_branch_enforce_admin.add_argument(
+        "--repo-filter", help="filter on repo name"
+    )
+    subparser_repos_toggle_branch_enforce_admin.add_argument(
+        "--pr-list",
+        help="path to a file containing PR URLs to act on",
+        type=path_exists,
+    )
+    subparser_repos_toggle_branch_enforce_admin.set_defaults(
+        func=handle_repos_toggle_branch_enforce_admin
+    )
 
     subparser_cache = subparsers.add_parser("cache", help="manage cache")
 

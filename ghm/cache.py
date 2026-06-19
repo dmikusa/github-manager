@@ -13,6 +13,7 @@ def cache(f):
         cache = self._cache
 
         parts = [f.__name__] + [str(a) for a in args if a is not None]
+        parts += [str(kwargs[k]) for k in sorted(kwargs) if kwargs[k] is not None]
         key = hashlib.sha256("_".join(parts).encode()).hexdigest()
 
         if cache.exists(key):

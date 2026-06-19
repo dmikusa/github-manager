@@ -54,7 +54,7 @@ class GhRunner:
 
     @cache
     def pr_list(
-        self, repo, filter=None, merge_state=None, review_decision=None, author=None
+        self, repo, filter=None, merge_state=None, review_decision=None, author=None, pr_list=None
     ):
         """List PRs for a repo
 
@@ -62,6 +62,57 @@ class GhRunner:
 
         Filter can be any valid search string like a keyword or Github keys.
         """
+        if pr_list is not None:
+            from urllib.parse import urlparse
+
+            pr_numbers = []
+            with open(pr_list) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parsed = urlparse(line)
+                    path_parts = parsed.path.strip("/").split("/")
+                    if len(path_parts) >= 4 and path_parts[2] == "pull":
+                        pr_repo = f"{path_parts[0]}/{path_parts[1]}"
+                        if pr_repo == repo:
+                            pr_numbers.append(int(path_parts[3]))
+            results = []
+            for num in pr_numbers:
+                try:
+                    results.append(self.pr_get(repo, num))
+                except subprocess.CalledProcessError:
+                    print(f"    Warning: PR #{num} not found in {repo}, skipping")
+            if filter:
+                results = [
+                    pr
+                    for pr in results
+                    if filter.lower() in pr["title"].lower()
+                ]
+            if author:
+                results = [
+                    pr
+                    for pr in results
+                    if pr.get("author", {}).get("login") == author
+                ]
+            if review_decision:
+                negate = review_decision.startswith("!")
+                value = review_decision[1:] if negate else review_decision
+                results = [
+                    pr
+                    for pr in results
+                    if (pr.get("reviewDecision") == value.upper()) != negate
+                ]
+            if merge_state:
+                negate = merge_state.startswith("!")
+                value = merge_state[1:] if negate else merge_state
+                results = [
+                    pr
+                    for pr in results
+                    if (pr.get("mergeStateStatus") == value.upper()) != negate
+                ]
+            return results
+
         cmd = ["gh", "pr", "list", "-R", repo, "--json", self._list_json_fields()]
         if filter:
             cmd.extend(["--search", filter])

@@ -27,8 +27,22 @@ def check_requirements():
         return False
 
 
-def load_repos(remote_repos=False, org=None):
+def load_repos(remote_repos=False, org=None, pr_list=None):
     """Loads a JSON formatted list of repositories to be used by the script"""
+    if pr_list:
+        from urllib.parse import urlparse
+
+        repos = set()
+        with open(pr_list) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parsed = urlparse(line)
+                path_parts = parsed.path.strip("/").split("/")
+                if len(path_parts) >= 4 and path_parts[2] == "pull":
+                    repos.add(f"{path_parts[0]}/{path_parts[1]}")
+        return sorted(repos)
     if remote_repos:
         repos = GhRunner().list_repos(org=org)
         return [repo["full_name"] for repo in repos if "full_name" in repo.keys()]

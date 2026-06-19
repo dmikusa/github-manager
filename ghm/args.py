@@ -71,7 +71,7 @@ def handle_repos_remote(args):
 
 def handle_pr_list(args):
     runner = GhRunner()
-    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+    repos = filter_repos(load_repos(pr_list=args.pr_list), args.repo, args.repo_filter)
     cols = "{:<45} {:^6} {:^10} {:^15} {:^10} {:^18} {:^10} {:^20} {}"
     print(
         cols.format(
@@ -93,6 +93,7 @@ def handle_pr_list(args):
             merge_state=args.merge_state,
             review_decision=args.review_decision,
             author=args.author,
+            pr_list=args.pr_list,
         )
         for pr in prs:
             print(
@@ -112,7 +113,7 @@ def handle_pr_list(args):
 
 def handle_pr_approve(args):
     runner = GhRunner()
-    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+    repos = filter_repos(load_repos(pr_list=args.pr_list), args.repo, args.repo_filter)
     for repo in repos:
         prs = runner.pr_list(
             repo,
@@ -120,6 +121,7 @@ def handle_pr_approve(args):
             merge_state=args.merge_state,
             review_decision=args.review_decision,
             author=args.author,
+            pr_list=args.pr_list,
         )
         for pr in prs:
             print(f"    Approving {repo} -> {pr['number']} [{pr['title']}]")
@@ -302,9 +304,9 @@ def handle_action_rerun(args):
 
 def handle_action_rerun_matching(args):
     runner = GhRunner()
-    repos = load_repos()
+    repos = load_repos(pr_list=args.pr_list)
     for repo in repos:
-        prs = runner.pr_list(repo, args.filter, args.merge_state)
+        prs = runner.pr_list(repo, args.filter, args.merge_state, pr_list=args.pr_list)
         if args.failed:
             prs = [
                 pr
@@ -462,7 +464,7 @@ def handle_action_run_complete_list(args):
 
 def handle_pr_merge(args):
     runner = GhRunner()
-    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+    repos = filter_repos(load_repos(pr_list=args.pr_list), args.repo, args.repo_filter)
     break_merging = False
     for repo in repos:
         if break_merging:
@@ -473,6 +475,7 @@ def handle_pr_merge(args):
             merge_state=args.merge_state,
             review_decision=args.review_decision,
             author=args.author,
+            pr_list=args.pr_list,
         )
         for pr in prs:
             if args.with_approve:
@@ -509,9 +512,9 @@ def handle_pr_merge(args):
 
 def handle_pr_branch_update(args):
     runner = GhRunner()
-    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+    repos = filter_repos(load_repos(pr_list=args.pr_list), args.repo, args.repo_filter)
     for repo in repos:
-        prs = runner.pr_list(repo, args.filter, args.merge_state, args.author)
+        prs = runner.pr_list(repo, args.filter, args.merge_state, args.author, pr_list=args.pr_list)
         for pr in prs:
             if pr["mergeStateStatus"] == "BEHIND" or args.force:
                 print(
@@ -528,9 +531,9 @@ def handle_pr_branch_update(args):
 
 def handle_pr_apply_label(args):
     runner = GhRunner()
-    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+    repos = filter_repos(load_repos(pr_list=args.pr_list), args.repo, args.repo_filter)
     for repo in repos:
-        prs = runner.pr_list(repo, args.filter, args.merge_state, args.author)
+        prs = runner.pr_list(repo, args.filter, args.merge_state, args.author, pr_list=args.pr_list)
         for pr in prs:
             print(f"    Applying tag to {repo} -> {pr['number']} [{pr['title']}]")
             runner.pr_apply_label(repo, pr["number"], args.label)
@@ -538,10 +541,10 @@ def handle_pr_apply_label(args):
 
 def handle_pr_remove_label(args):
     runner = GhRunner()
-    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+    repos = filter_repos(load_repos(pr_list=args.pr_list), args.repo, args.repo_filter)
     for repo in repos:
         prs = runner.pr_list(
-            repo, filter=args.filter, merge_state=args.merge_state, author=args.author
+            repo, filter=args.filter, merge_state=args.merge_state, author=args.author, pr_list=args.pr_list,
         )
         for pr in prs:
             print(f"    Removing label from {repo} -> {pr['number']} [{pr['title']}]")
@@ -768,6 +771,11 @@ def parse_args():
     list_parser.add_argument("--repo", help="repo name")
     list_parser.add_argument("--repo-filter", help="filter on repo name")
     list_parser.add_argument("--author", help="filter on author")
+    list_parser.add_argument(
+        "--pr-list",
+        help="path to a file containing PR URLs to act on",
+        type=path_exists,
+    )
     list_parser.set_defaults(func=handle_pr_list)
 
     approve_parser = subparser_pr.add_parser("approve", help="approve matching PRs")
@@ -792,6 +800,11 @@ def parse_args():
     approve_parser.add_argument("--repo", help="repo name")
     approve_parser.add_argument("--repo-filter", help="filter on repo name")
     approve_parser.add_argument("--author", help="filter on author")
+    approve_parser.add_argument(
+        "--pr-list",
+        help="path to a file containing PR URLs to act on",
+        type=path_exists,
+    )
     approve_parser.set_defaults(func=handle_pr_approve)
 
     merge_parser = subparser_pr.add_parser("merge", help="merge matching PRs")
@@ -837,6 +850,11 @@ def parse_args():
         default="merge",
     )
     merge_parser.add_argument("--author", help="filter on author")
+    merge_parser.add_argument(
+        "--pr-list",
+        help="path to a file containing PR URLs to act on",
+        type=path_exists,
+    )
     merge_parser.set_defaults(func=handle_pr_merge)
 
     update_br_parser = subparser_pr.add_parser(
@@ -855,6 +873,11 @@ def parse_args():
         "--force",
         help="force update despite merge status",
         action=argparse.BooleanOptionalAction,
+    )
+    update_br_parser.add_argument(
+        "--pr-list",
+        help="path to a file containing PR URLs to act on",
+        type=path_exists,
     )
     update_br_parser.set_defaults(func=handle_pr_branch_update)
 
@@ -875,6 +898,11 @@ def parse_args():
         help="label to apply",
         required=True,
     )
+    apply_label_parser.add_argument(
+        "--pr-list",
+        help="path to a file containing PR URLs to act on",
+        type=path_exists,
+    )
     apply_label_parser.set_defaults(func=handle_pr_apply_label)
 
     remove_label_parser = subparser_pr.add_parser(
@@ -893,6 +921,11 @@ def parse_args():
         "--label",
         help="label to remove",
         required=True,
+    )
+    remove_label_parser.add_argument(
+        "--pr-list",
+        help="path to a file containing PR URLs to act on",
+        type=path_exists,
     )
     remove_label_parser.set_defaults(func=handle_pr_remove_label)
 
@@ -969,6 +1002,11 @@ def parse_args():
     )
     rerun_matching_parser.add_argument(
         "--failed", help="only failed", action=argparse.BooleanOptionalAction
+    )
+    rerun_matching_parser.add_argument(
+        "--pr-list",
+        help="path to a file containing PR URLs to act on",
+        type=path_exists,
     )
     rerun_matching_parser.set_defaults(func=handle_action_rerun_matching)
 

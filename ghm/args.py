@@ -149,15 +149,14 @@ def handle_pr_list(args):
             "TITLE",
         )
     )
-    for repo in repos:
-        prs = runner.pr_list(
-            repo,
-            filter=args.filter,
-            merge_state=args.merge_state,
-            review_decision=args.review_decision,
-            author=args.author,
-            pr_list=args.pr_list,
-        )
+    prs_by_repo = runner.pr_list_many(
+        repos,
+        filter=args.filter,
+        merge_state=args.merge_state,
+        review_decision=args.review_decision,
+        author=args.author,
+    )
+    for repo, prs in prs_by_repo.items():
         for pr in prs:
             print(
                 cols.format(
@@ -177,15 +176,14 @@ def handle_pr_list(args):
 def handle_pr_approve(args):
     runner = GhRunner()
     repos = filter_repos(load_repos(pr_list=args.pr_list), args.repo, args.repo_filter)
-    for repo in repos:
-        prs = runner.pr_list(
-            repo,
-            filter=args.filter,
-            merge_state=args.merge_state,
-            review_decision=args.review_decision,
-            author=args.author,
-            pr_list=args.pr_list,
-        )
+    prs_by_repo = runner.pr_list_many(
+        repos,
+        filter=args.filter,
+        merge_state=args.merge_state,
+        review_decision=args.review_decision,
+        author=args.author,
+    )
+    for repo, prs in prs_by_repo.items():
         for pr in prs:
             print(f"    Approving {repo} -> {pr['number']} [{pr['title']}]")
             stdout, stderr = runner.pr_approve(repo, pr["number"])
@@ -600,17 +598,16 @@ def handle_pr_merge(args):
     repos = filter_repos(load_repos(pr_list=args.pr_list), args.repo, args.repo_filter)
     break_merging = False
 
-    for repo in repos:
+    prs_by_repo = runner.pr_list_many(
+        repos,
+        filter=args.filter,
+        merge_state=args.merge_state,
+        review_decision=args.review_decision,
+        author=args.author,
+    )
+    for repo, prs in prs_by_repo.items():
         if break_merging:
             break
-        prs = runner.pr_list(
-            repo,
-            filter=args.filter,
-            merge_state=args.merge_state,
-            review_decision=args.review_decision,
-            author=args.author,
-            pr_list=args.pr_list,
-        )
         if not prs:
             continue
 

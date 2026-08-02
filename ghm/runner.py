@@ -2,7 +2,9 @@ from itertools import chain
 import subprocess
 import json
 import re
-from .cache import Cache, cache, invalidate
+from .cache import Cache, cache, invalidate, cache_key, _debug
+
+PR_BATCH_SIZE = 20
 
 PAGE = re.compile(r'<.*?page=(\d+)&.*?>; rel="(.*?)",')
 
@@ -150,7 +152,98 @@ class GhRunner:
         out = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(out.stdout)
 
-    @invalidate("pr_list", "pr_get")
+    def pr_list_many(
+        self,
+        repos,
+        filter=None,
+        merge_state=None,
+        review_decision=None,
+        author=None,
+        states="OPEN",
+        batch_size=PR_BATCH_SIZE,
+    ):
+        """Fetch PRs for many repos, batching the queries into a single
+        GraphQL request per batch. Returns a dict of repo -> list of PRs.
+
+        Each repo's PRs are cached individually under the 'pr_list_many'
+        method so invalidating one repo does not discard the rest. The
+        filter/merge_state/review_decision/author filters are applied
+        client-side after fetching, keeping the cached data reusable
+        across different filters.
+        """
+        result = {}
+        missing = []
+        for repo in repos:
+            if not self.skip_cache:
+                entry = self._cache.get("pr_list_many", cache_key((repo,), {}))
+                if entry is not None:
+                    _debug(f"HIT  pr_list_many({repo})")
+                    result[repo] = entry
+                    continue
+            _debug(f"MISS pr_list_many({repo})")
+            missing.append(repo)
+
+        for batch in _chunks(missing, batch_size):
+            try:
+                data = self._gh_pr_query_many(batch, states)
+            except subprocess.CalledProcessError:
+                data = {}
+                for repo in batch:
+                    data[repo] = self.pr_list(repo)
+            for repo, prs in data.items():
+                if not self.skip_cache:
+                    self._cache.save(
+                        "pr_list_many", cache_key((repo,), {}), prs, scope=repo
+                    )
+                    _debug(f"SAVE pr_list_many({repo})")
+                result[repo] = prs
+
+        return {
+            repo: [pr for pr in prs if _pr_matches(
+                pr, filter, merge_state, review_decision, author
+            )]
+            for repo, prs in result.items()
+        }
+
+    def _gh_pr_query_many(self, repos, states="OPEN", first=100):
+        """Run a single GraphQL query fetching PRs for the given repos."""
+        parts = []
+        for i, repo in enumerate(repos):
+            owner, name = repo.split("/", 1)
+            parts.append(
+                f'r{i}: repository(owner: "{owner}", name: "{name}") {{ '
+                f'pullRequests(first: {first}, states: {states}) {{ nodes {{ '
+                "author { login } baseRefName number state title url "
+                "reviewDecision mergeable mergeStateStatus "
+                "statusCheckRollup { state contexts(first: 50) { nodes { "
+                "__typename "
+                "... on CheckRun { name status conclusion detailsUrl } "
+                "... on StatusContext { context state targetUrl } "
+                "} } } "
+                "} } }"
+            )
+        query = "query { " + " ".join(parts) + " }"
+        cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
+        out = subprocess.run(cmd, capture_output=True, check=True)
+        data = json.loads(out.stdout)["data"]
+        result = {}
+        for i, repo in enumerate(repos):
+            node = data.get(f"r{i}")
+            if node is None:
+                result[repo] = []
+                continue
+            prs = []
+            for pr in node["pullRequests"]["nodes"]:
+                pr = dict(pr)
+                rollup = pr.get("statusCheckRollup") or {}
+                pr["statusCheckRollup"] = (
+                    rollup.get("contexts", {}).get("nodes", []) or []
+                )
+                prs.append(pr)
+            result[repo] = prs
+        return result
+
+    @invalidate("pr_list", "pr_get", "pr_list_many")
     def pr_approve(self, repo, number):
         """Mark a PR as reviewed
 
@@ -167,7 +260,7 @@ class GhRunner:
         cmd = ["gh", "pr", "view", "-R", repo, str(number), "-w"]
         subprocess.run(cmd, capture_output=True, check=True)
 
-    @invalidate("pr_list", use_scope=False)
+    @invalidate("pr_list", "pr_list_many", use_scope=False)
     def pr_create(self, repo_path, labels):
         """Create a PR"""
         cmd = ["gh", "pr", "create", "--fill"]
@@ -176,7 +269,7 @@ class GhRunner:
             cmd.extend(labels)
         subprocess.run(cmd, cwd=repo_path, capture_output=True, check=True)
 
-    @invalidate("pr_list", "pr_get")
+    @invalidate("pr_list", "pr_get", "pr_list_many")
     def pr_merge(self, repo, number, admin, merge_type):
         """Merge the PR"""
         cmd = ["gh", "pr", "merge", "-R", repo, str(number)]
@@ -228,7 +321,7 @@ class GhRunner:
         ]
         subprocess.run(cmd, capture_output=True, check=True)
 
-    @invalidate("pr_list", "pr_get")
+    @invalidate("pr_list", "pr_get", "pr_list_many")
     def pr_update_branch(self, repo, number):
         """Update branch of the PR"""
         cmd = [
@@ -243,7 +336,7 @@ class GhRunner:
         out = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(out.stdout)
 
-    @invalidate("pr_list", "pr_get")
+    @invalidate("pr_list", "pr_get", "pr_list_many")
     def pr_apply_label(self, repo, number, label):
         """Apply a label to the PRs"""
         cmd = [
@@ -259,7 +352,7 @@ class GhRunner:
         out = subprocess.run(cmd, capture_output=True, check=True)
         return out.stdout
 
-    @invalidate("pr_list", "pr_get")
+    @invalidate("pr_list", "pr_get", "pr_list_many")
     def pr_remove_label(self, repo, number, label):
         """Remove a label from PRs"""
         cmd = [
@@ -497,3 +590,26 @@ class GitRunner:
     def rev_parse(self, branch):
         cmd = ["rev-parse", branch]
         return self.__run(cmd)
+
+
+def _chunks(lst, n):
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]
+
+
+def _pr_matches(pr, filter=None, merge_state=None, review_decision=None, author=None):
+    if filter and filter.lower() not in pr["title"].lower():
+        return False
+    if author and pr.get("author", {}).get("login") != author:
+        return False
+    if review_decision:
+        negate = review_decision.startswith("!")
+        value = review_decision[1:] if negate else review_decision
+        if (pr.get("reviewDecision") == value.upper()) == negate:
+            return False
+    if merge_state:
+        negate = merge_state.startswith("!")
+        value = merge_state[1:] if negate else merge_state
+        if (pr.get("mergeStateStatus") == value.upper()) == negate:
+            return False
+    return True

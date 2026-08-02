@@ -348,7 +348,8 @@ def handle_action_run_matching(args):
 
 
 def _rerun_failed(runner, pr, repo):
-    failed = [s for s in pr["statusCheckRollup"] if s["conclusion"] == "FAILURE"]
+    rollup = pr.get("statusCheckRollup") or []
+    failed = [s for s in rollup if s.get("conclusion") == "FAILURE"]
     for fail in failed:
         print(f"    Rerunning {repo} -> {fail['name']} ({fail['detailsUrl']}")
         run_num = fail["detailsUrl"].split("/")[-1]
@@ -374,7 +375,12 @@ def handle_action_rerun_matching(args):
             prs = [
                 pr
                 for pr in prs
-                if any(map(lambda pr: not check_status_ok(pr), pr["statusCheckRollup"]))
+                if any(
+                    map(
+                        lambda pr: not check_status_ok(pr),
+                        pr.get("statusCheckRollup") or [],
+                    )
+                )
             ]
         for pr in prs:
             _rerun_failed(runner, pr, repo)

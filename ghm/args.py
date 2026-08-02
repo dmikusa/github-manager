@@ -370,7 +370,13 @@ def handle_action_rerun_matching(args):
     runner = GhRunner()
     repos = load_repos(pr_list=args.pr_list)
     for repo in repos:
-        prs = runner.pr_list(repo, args.filter, args.merge_state, pr_list=args.pr_list)
+        prs = runner.pr_list(
+            repo,
+            filter=args.filter,
+            merge_state=args.merge_state,
+            author=args.author,
+            pr_list=args.pr_list,
+        )
         if args.failed:
             prs = [
                 pr
@@ -1158,6 +1164,7 @@ def parse_args():
         "rerun-matching", help="Rerun failed actions matching filter"
     )
     rerun_matching_parser.add_argument("--filter", help="keyword or Github filter")
+    rerun_matching_parser.add_argument("--author", help="filter on author")
     rerun_matching_parser.add_argument(
         "--merge-state",
         help="blocked, clean or draft. Prefix with `!` to negate.",

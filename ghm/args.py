@@ -622,7 +622,13 @@ def handle_pr_branch_update(args):
     runner = GhRunner()
     repos = filter_repos(load_repos(pr_list=args.pr_list), args.repo, args.repo_filter)
     for repo in repos:
-        prs = runner.pr_list(repo, args.filter, args.merge_state, args.author, pr_list=args.pr_list)
+        prs = runner.pr_list(
+            repo,
+            filter=args.filter,
+            merge_state=args.merge_state,
+            author=args.author,
+            pr_list=args.pr_list,
+        )
         for pr in prs:
             if pr["mergeStateStatus"] == "BEHIND" or args.force:
                 print(
@@ -641,7 +647,13 @@ def handle_pr_apply_label(args):
     runner = GhRunner()
     repos = filter_repos(load_repos(pr_list=args.pr_list), args.repo, args.repo_filter)
     for repo in repos:
-        prs = runner.pr_list(repo, args.filter, args.merge_state, args.author, pr_list=args.pr_list)
+        prs = runner.pr_list(
+            repo,
+            filter=args.filter,
+            merge_state=args.merge_state,
+            author=args.author,
+            pr_list=args.pr_list,
+        )
         for pr in prs:
             print(f"    Applying tag to {repo} -> {pr['number']} [{pr['title']}]")
             runner.pr_apply_label(repo, pr["number"], args.label)

@@ -2,7 +2,7 @@ from itertools import chain
 import subprocess
 import json
 import re
-from .cache import Cache, cache, invalidate, cache_key, _debug
+from .cache import get_cache, cache, invalidate, cache_key, _debug
 
 PR_BATCH_SIZE = 20
 
@@ -13,8 +13,7 @@ class GhRunner:
     skip_cache = False
 
     def __init__(self):
-        self._cache = Cache()
-        self._cache.load()
+        self._cache = get_cache()
 
     def __del__(self):
         self._cache.store()
@@ -254,7 +253,6 @@ class GhRunner:
         res = subprocess.run(cmd, capture_output=True, check=True)
         return (res.stdout, res.stderr)
 
-    @cache
     def pr_open(self, repo, number):
         """Open the PR in a browser"""
         cmd = ["gh", "pr", "view", "-R", repo, str(number), "-w"]
@@ -393,6 +391,7 @@ class GhRunner:
             for line in res.stdout.splitlines()
         ]
 
+    @cache
     def run_list_active(self, repo, status):
         """List active workflow runs (in_progress & queued)"""
         cmd = [
@@ -405,6 +404,7 @@ class GhRunner:
         out = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(out.stdout)
 
+    @cache
     def run_list_complete(self, repo, limit=100):
         """List completed workflow runs"""
         data = []
@@ -418,6 +418,7 @@ class GhRunner:
             data.extend(page_data.get("workflow_runs", []))
         return data
 
+    @cache
     def _fetch_run_list_complete_page(self, repo, page, per_page):
         """Fetch a single page of results"""
         cmd = [
@@ -433,18 +434,21 @@ class GhRunner:
         headers, body = out.stdout.split("\n\n", 1)
         return (self._next_page(headers), json.loads(body))
 
+    @invalidate("run_list_active", "run_list_complete")
     def workflow_run(self, repo, name):
         """Run a given workflow"""
         cmd = ["gh", "workflow", "run", "-R", repo, name]
         res = subprocess.run(cmd, capture_output=True, check=True)
         return (res.stdout, res.stderr)
 
+    @invalidate("workflow_list")
     def workflow_enable(self, repo, name):
         """Enable a given workflow"""
         cmd = ["gh", "workflow", "enable", "-R", repo, name]
         res = subprocess.run(cmd, capture_output=True, check=True)
         return (res.stdout, res.stderr)
 
+    @invalidate("workflow_list")
     def workflow_disable(self, repo, name):
         """Disable a given workflow"""
         cmd = ["gh", "workflow", "disable", "-R", repo, name]
@@ -460,6 +464,7 @@ class GhRunner:
             if release["draft"]:
                 return release
 
+    @cache
     def fetch_latest_release(self, repo):
         """Fetch the latest 2 releases of a repo"""
         cmd = ["gh", "release", "list", "-R", repo, "-L", "2"]
@@ -468,7 +473,7 @@ class GhRunner:
             (line.decode("utf-8").split("\t")[0:]) for line in res.stdout.splitlines()
         ]
 
-    @invalidate("fetch_draft_release")
+    @invalidate("fetch_draft_release", "fetch_latest_release")
     def release_publish(self, repo, id, tag):
         """Publish a draft release"""
         cmd = [
@@ -485,6 +490,7 @@ class GhRunner:
         res = subprocess.run(cmd, capture_output=True, check=True)
         return json.loads(res.stdout)
 
+    @cache
     def list_repos(self, org=None):
         """List all the repos in the org"""
         data = []
@@ -495,6 +501,7 @@ class GhRunner:
             data.extend(page_data)
         return data
 
+    @cache
     def _fetch_list_repos_page(self, page, org=None):
         """Fetch a single page of results"""
         if org is None:

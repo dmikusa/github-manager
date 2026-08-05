@@ -1,10 +1,12 @@
 import os
 import json
 from .runner import GhRunner
+from .cache import cache_call
 
 REPO_CONFIG_LOCATION = os.path.expanduser("~/.ghm/repos.json")
 
 
+@cache_call
 def fetch_buildpack_toml(repo):
     import urllib.request
     import subprocess

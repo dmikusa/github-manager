@@ -10,7 +10,7 @@ import os
 from prettytable import PrettyTable
 from .runner import GhRunner, GitRunner
 from .utils import load_repos, REPO_CONFIG_LOCATION, fetch_buildpack_toml
-from .cache import Cache
+from .cache import get_cache
 
 NOT_RUNNABLE = (
     "could not create workflow dispatch event: HTTP 422:"
@@ -790,7 +790,7 @@ def handle_release_publish(args):
 
 
 def clear_cache(args):
-    Cache().clear()
+    get_cache().clear()
 
 
 def single_yes_or_no_question(question, default_no=True):

@@ -151,3 +151,38 @@ class Cache:
             self._data[method] = {
                 k: v for k, v in entries.items() if v.get("scope") != scope
             }
+
+
+_shared_cache = Cache()
+_shared_loaded = False
+
+
+def get_cache():
+    """Return the process-wide cache, loading from disk once."""
+    global _shared_loaded
+    if not _shared_loaded:
+        _shared_cache.load()
+        _shared_loaded = True
+    return _shared_cache
+
+
+def cache_call(f, ttl=CACHE_TTL_DEFAULT):
+    """Cache a module-level function (no `self`), persisting to the shared
+    cache file on each save."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        cache = get_cache()
+        key = cache_key(args, kwargs)
+        method = f.__name__
+        entry = cache.get(method, key)
+        if entry is not None:
+            _debug(f"HIT  {_ident(method, args, kwargs)}")
+            return entry
+
+        _debug(f"MISS {_ident(method, args, kwargs)}")
+        val = f(*args, **kwargs)
+        cache.save(method, key, val, ttl=ttl)
+        cache.store()
+        _debug(f"SAVE {_ident(method, args, kwargs)}")
+        return val
+    return wrapper

@@ -9,27 +9,49 @@ from functools import wraps
 CACHE_LOCATION = os.path.expanduser('~/.ghm/cache.json')
 CACHE_TTL_DEFAULT = 60
 
+_DEBUG = os.environ.get("GHM_CACHE_DEBUG")
+
+
+def _debug(msg):
+    if _DEBUG:
+        print(f"[cache] {msg}", file=sys.stderr)
+
+
+def _ident(method, args, kwargs):
+    parts = [str(a) for a in args if a is not None]
+    parts += [str(kwargs[k]) for k in sorted(kwargs) if kwargs[k] is not None]
+    return f"{method}({', '.join(parts)})"
+
+
+def cache_key(args, kwargs=None):
+    kwargs = kwargs or {}
+    parts = [str(a) for a in args if a is not None]
+    parts += [str(kwargs[k]) for k in sorted(kwargs) if kwargs[k] is not None]
+    return hashlib.sha256("_".join(parts).encode()).hexdigest()
+
 
 def cache(f, ttl=CACHE_TTL_DEFAULT):
     @wraps(f)
     def wrapper(self, *args, **kwargs):
         if getattr(self, 'skip_cache', False):
+            _debug(f"MISS(disabled) {_ident(f.__name__, args, kwargs)}")
             return f(self, *args, **kwargs)
 
         cache = self._cache
 
-        parts = [str(a) for a in args if a is not None]
-        parts += [str(kwargs[k]) for k in sorted(kwargs) if kwargs[k] is not None]
-        key = hashlib.sha256("_".join(parts).encode()).hexdigest()
+        key = cache_key(args, kwargs)
 
         method = f.__name__
         entry = cache.get(method, key)
         if entry is not None:
+            _debug(f"HIT  {_ident(method, args, kwargs)}")
             return entry
 
+        _debug(f"MISS {_ident(method, args, kwargs)}")
         val = f(self, *args, **kwargs)
         scope = args[0] if args else None
         cache.save(method, key, val, scope=scope, ttl=ttl)
+        _debug(f"SAVE {_ident(method, args, kwargs)}")
         return val
     return wrapper
 
@@ -43,6 +65,7 @@ def invalidate(*method_names, use_scope=True):
             scope = args[0] if use_scope and args else None
             for method_name in method_names:
                 cache.invalidate_method(method_name, scope=scope)
+                _debug(f"INVALIDATE {method_name} scope={scope}")
             return val
         return wrapper
     return decorator
@@ -128,3 +151,38 @@ class Cache:
             self._data[method] = {
                 k: v for k, v in entries.items() if v.get("scope") != scope
             }
+
+
+_shared_cache = Cache()
+_shared_loaded = False
+
+
+def get_cache():
+    """Return the process-wide cache, loading from disk once."""
+    global _shared_loaded
+    if not _shared_loaded:
+        _shared_cache.load()
+        _shared_loaded = True
+    return _shared_cache
+
+
+def cache_call(f, ttl=CACHE_TTL_DEFAULT):
+    """Cache a module-level function (no `self`), persisting to the shared
+    cache file on each save."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        cache = get_cache()
+        key = cache_key(args, kwargs)
+        method = f.__name__
+        entry = cache.get(method, key)
+        if entry is not None:
+            _debug(f"HIT  {_ident(method, args, kwargs)}")
+            return entry
+
+        _debug(f"MISS {_ident(method, args, kwargs)}")
+        val = f(*args, **kwargs)
+        cache.save(method, key, val, ttl=ttl)
+        cache.store()
+        _debug(f"SAVE {_ident(method, args, kwargs)}")
+        return val
+    return wrapper

@@ -502,6 +502,525 @@ class GhRunner:
         return data
 
     @cache
+    def fetch_repo(self, repo):
+        """Fetch repository general settings (adjustable only)"""
+        cmd = ["gh", "api", f"/repos/{repo}"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        data = json.loads(res.stdout)
+        return {
+            "name": data.get("name"),
+            "description": data.get("description"),
+            "homepage": data.get("homepage"),
+            "private": data.get("private"),
+            "has_issues": data.get("has_issues"),
+            "has_projects": data.get("has_projects"),
+            "has_wiki": data.get("has_wiki"),
+            "has_pages": data.get("has_pages"),
+            "has_discussions": data.get("has_discussions"),
+            "allow_squash_merge": data.get("allow_squash_merge"),
+            "allow_merge_commit": data.get("allow_merge_commit"),
+            "allow_rebase_merge": data.get("allow_rebase_merge"),
+            "allow_auto_merge": data.get("allow_auto_merge"),
+            "delete_branch_on_merge": data.get("delete_branch_on_merge"),
+            "allow_update_branch": data.get("allow_update_branch"),
+            "use_squash_pr_title_as_default": data.get("use_squash_pr_title_as_default"),
+            "squash_merge_commit_message": data.get("squash_merge_commit_message"),
+            "squash_merge_commit_title": data.get("squash_merge_commit_title"),
+            "merge_commit_message": data.get("merge_commit_message"),
+            "merge_commit_title": data.get("merge_commit_title"),
+            "archived": data.get("archived"),
+            "allow_forking": data.get("allow_forking"),
+            "web_commit_signoff_required": data.get("web_commit_signoff_required"),
+            "default_branch": data.get("default_branch"),
+            "topics": data.get("topics"),
+            "visibility": data.get("visibility"),
+            "security_and_analysis": data.get("security_and_analysis"),
+        }
+
+    @cache
+    def fetch_collaborators(self, repo):
+        """Fetch repository collaborators/access settings (adjustable only)"""
+        # Get direct collaborators (explicitly added to repo)
+        cmd = ["gh", "api", "--paginate", f"/repos/{repo}/collaborators?affiliation=direct"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        direct = json.loads(res.stdout)
+
+        # Get outside collaborators (not org members)
+        cmd = ["gh", "api", "--paginate", f"/repos/{repo}/collaborators?affiliation=outside"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        outside = json.loads(res.stdout)
+
+        # Get all collaborators (includes org members via teams)
+        cmd = ["gh", "api", "--paginate", f"/repos/{repo}/collaborators?affiliation=all"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        all_collaborators = json.loads(res.stdout)
+
+        # Get teams with access to the repo
+        cmd = ["gh", "api", "--paginate", f"/repos/{repo}/teams"]
+        res = subprocess.run(cmd, capture_output=True)
+        teams = []
+        team_slugs = []
+        if res.returncode == 0 and res.stdout.strip():
+            teams_data = json.loads(res.stdout)
+            for t in teams_data:
+                slug = t.get("slug")
+                team_slugs.append(slug)
+                teams.append({
+                    "name": t.get("name"),
+                    "slug": slug,
+                    "description": t.get("description"),
+                    "privacy": t.get("privacy"),
+                    "permission": t.get("permission"),
+                    "permissions": t.get("permissions"),
+                    "url": t.get("url"),
+                    "html_url": t.get("html_url"),
+                })
+
+        # Fetch members for each team to build access source mapping
+        team_members = {}
+        org = repo.split("/")[0]
+        for slug in team_slugs:
+            cmd = ["gh", "api", "--paginate", f"/orgs/{org}/teams/{slug}/members"]
+            res = subprocess.run(cmd, capture_output=True)
+            if res.returncode == 0 and res.stdout.strip():
+                members = json.loads(res.stdout)
+                for m in members:
+                    login = m.get("login")
+                    if login not in team_members:
+                        team_members[login] = []
+                    team_members[login].append(slug)
+
+        # Build all collaborators with access source
+        direct_logins = {c.get("login") for c in direct}
+        outside_logins = {c.get("login") for c in outside}
+
+        def build_user(c, source):
+            return {
+                "login": c.get("login"),
+                "permissions": c.get("permissions"),
+                "role_name": c.get("role_name"),
+                "access_source": source,
+            }
+
+        def has_elevated_permissions(c):
+            """Check if user has write/maintain/admin access (beyond read)"""
+            perms = c.get("permissions", {})
+            return perms.get("push") or perms.get("triage") or perms.get("maintain") or perms.get("admin")
+
+        all_users = []
+        for c in all_collaborators:
+            login = c.get("login")
+            if login in direct_logins:
+                source = "direct"
+            elif login in outside_logins:
+                source = "outside"
+            elif login in team_members:
+                source = "team"
+            else:
+                source = "org_member"
+
+            # Skip org_member with only read access (default org permissions)
+            if source == "org_member" and not has_elevated_permissions(c):
+                continue
+
+            all_users.append(build_user(c, source))
+
+        return {
+            "direct": [build_user(c, "direct") for c in direct],
+            "outside": [build_user(c, "outside") for c in outside],
+            "all": all_users,
+            "teams": teams,
+            "team_members": team_members,
+        }
+
+    def _clean_required_status_checks(self, data):
+        """Clean required_status_checks to only adjustable fields"""
+        if not data:
+            return None
+        return {
+            "strict": data.get("strict"),
+            "contexts": data.get("contexts"),
+            "checks": [
+                {"context": c.get("context"), "app_id": c.get("app_id")}
+                for c in data.get("checks", [])
+            ],
+        }
+
+    def _clean_required_pull_request_reviews(self, data):
+        """Clean required_pull_request_reviews to only adjustable fields"""
+        if not data:
+            return None
+        return {
+            "dismiss_stale_reviews": data.get("dismiss_stale_reviews"),
+            "require_code_owner_reviews": data.get("require_code_owner_reviews"),
+            "require_last_push_approval": data.get("require_last_push_approval"),
+            "required_approving_review_count": data.get("required_approving_review_count"),
+            "dismissal_restrictions": data.get("dismissal_restrictions"),
+            "bypass_pull_request_allowances": data.get("bypass_pull_request_allowances"),
+        }
+
+    def _clean_restrictions(self, data):
+        """Clean restrictions to only adjustable fields"""
+        if not data:
+            return None
+        return {
+            "users": data.get("users"),
+            "teams": data.get("teams"),
+            "apps": data.get("apps"),
+        }
+
+    @cache
+    def fetch_branch_protection(self, repo, branch="main"):
+        """Fetch old-style branch protection rules for a branch (adjustable only)"""
+        cmd = ["gh", "api", f"/repos/{repo}/branches/{branch}/protection"]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode == 404:
+            return None
+        if res.returncode != 0:
+            raise Exception(f"Failed to fetch branch protection: {res.stderr.decode()}")
+        data = json.loads(res.stdout)
+        return {
+            "branch": branch,
+            "required_status_checks": self._clean_required_status_checks(data.get("required_status_checks")),
+            "enforce_admins": data.get("enforce_admins", {}).get("enabled"),
+            "required_pull_request_reviews": self._clean_required_pull_request_reviews(data.get("required_pull_request_reviews")),
+            "restrictions": self._clean_restrictions(data.get("restrictions")),
+            "required_linear_history": data.get("required_linear_history", {}).get("enabled"),
+            "allow_force_pushes": data.get("allow_force_pushes", {}).get("enabled"),
+            "allow_deletions": data.get("allow_deletions", {}).get("enabled"),
+            "block_creations": data.get("block_creations", {}).get("enabled"),
+            "required_conversation_resolution": data.get("required_conversation_resolution", {}).get("enabled"),
+            "lock_branch": data.get("lock_branch", {}).get("enabled"),
+            "allow_fork_syncing": data.get("allow_fork_syncing", {}).get("enabled"),
+        }
+
+    @cache
+    def fetch_rulesets(self, repo):
+        """Fetch new-style branch protection rules (rulesets) (adjustable only)"""
+        cmd = ["gh", "api", "--paginate", f"/repos/{repo}/rulesets"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        data = json.loads(res.stdout)
+        return [
+            {
+                "name": r.get("name"),
+                "target": r.get("target"),
+                "enforcement": r.get("enforcement"),
+                "bypass_actors": r.get("bypass_actors"),
+                "conditions": r.get("conditions"),
+                "rules": r.get("rules"),
+            }
+            for r in data
+        ]
+
+    @cache
+    def fetch_actions_permissions(self, repo):
+        """Fetch GitHub Actions permissions (adjustable only)"""
+        cmd = ["gh", "api", f"/repos/{repo}/actions/permissions"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        data = json.loads(res.stdout)
+        return {
+            "enabled": data.get("enabled"),
+            "allowed_actions": data.get("allowed_actions"),
+            "sha_pinning_required": data.get("sha_pinning_required"),
+        }
+
+    @cache
+    def fetch_actions_workflow_permissions(self, repo):
+        """Fetch default workflow permissions (adjustable only)"""
+        cmd = ["gh", "api", f"/repos/{repo}/actions/permissions/workflow"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        data = json.loads(res.stdout)
+        return {
+            "default_workflow_permissions": data.get("default_workflow_permissions"),
+            "can_approve_pull_request_reviews": data.get("can_approve_pull_request_reviews"),
+        }
+
+    @cache
+    def fetch_actions_access_level(self, repo):
+        """Fetch actions access level (private repos only) (adjustable only)"""
+        cmd = ["gh", "api", f"/repos/{repo}/actions/permissions/access"]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode != 0:
+            err = res.stderr.decode() if res.stderr else res.stdout.decode()
+            if "Access policy only applies to internal and private repositories" in err:
+                return None
+            raise Exception(f"Failed to fetch actions access: {err}")
+        data = json.loads(res.stdout)
+        return {
+            "access_level": data.get("access_level"),
+        }
+
+    @cache
+    def fetch_webhooks(self, repo):
+        """Fetch repository webhooks (adjustable only)"""
+        cmd = ["gh", "api", "--paginate", f"/repos/{repo}/hooks"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        data = json.loads(res.stdout)
+        return [
+            {
+                "name": w.get("name"),
+                "active": w.get("active"),
+                "events": w.get("events"),
+                "config": {
+                    "url": w.get("config", {}).get("url"),
+                    "content_type": w.get("config", {}).get("content_type"),
+                    "insecure_ssl": w.get("config", {}).get("insecure_ssl"),
+                },
+            }
+            for w in data
+        ]
+
+    @cache
+    def fetch_environments(self, repo):
+        """Fetch repository environments (adjustable only)"""
+        cmd = ["gh", "api", "--paginate", f"/repos/{repo}/environments"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        data = json.loads(res.stdout)
+        environments = data.get("environments", [])
+        return [
+            {
+                "name": e.get("name"),
+                "wait_timer": e.get("wait_timer"),
+                "prevent_self_review": e.get("prevent_self_review"),
+                "reviewers": e.get("reviewers"),
+                "deployment_branch_policy": e.get("deployment_branch_policy"),
+            }
+            for e in environments
+        ]
+
+    @cache
+    def fetch_code_security_config(self, repo):
+        """Fetch code security configuration (secret scanning, dependabot, etc.) (adjustable only)"""
+        cmd = ["gh", "api", f"/repos/{repo}/code-security-configuration"]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode == 404:
+            return None
+        if res.returncode != 0:
+            raise Exception(f"Failed to fetch code security config: {res.stderr.decode()}")
+        if not res.stdout.strip():
+            return None
+        data = json.loads(res.stdout)
+        config = data.get("configuration", {})
+        return {
+            "advanced_security": config.get("advanced_security"),
+            "dependency_graph": config.get("dependency_graph"),
+            "dependency_graph_autosubmit_action": config.get("dependency_graph_autosubmit_action"),
+            "dependabot_alerts": config.get("dependabot_alerts"),
+            "dependabot_security_updates": config.get("dependabot_security_updates"),
+            "secret_scanning": config.get("secret_scanning"),
+            "secret_scanning_push_protection": config.get("secret_scanning_push_protection"),
+            "secret_scanning_validity_checks": config.get("secret_scanning_validity_checks"),
+            "secret_scanning_non_provider_patterns": config.get("secret_scanning_non_provider_patterns"),
+            "secret_scanning_generic_secrets": config.get("secret_scanning_generic_secrets"),
+            "secret_scanning_extended_metadata": config.get("secret_scanning_extended_metadata"),
+            "private_vulnerability_reporting": config.get("private_vulnerability_reporting"),
+            "enforcement": config.get("enforcement"),
+        }
+
+    @cache
+    def fetch_code_scanning_setup(self, repo):
+        """Fetch code scanning default setup (adjustable only)"""
+        cmd = ["gh", "api", f"/repos/{repo}/code-scanning/default-setup"]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode == 404:
+            return None
+        if res.returncode != 0:
+            raise Exception(f"Failed to fetch code scanning setup: {res.stderr.decode()}")
+        if not res.stdout.strip():
+            return None
+        data = json.loads(res.stdout)
+        return {
+            "state": data.get("state"),
+            "languages": data.get("languages"),
+            "runner_type": data.get("runner_type"),
+            "runner_label": data.get("runner_label"),
+            "query_suite": data.get("query_suite"),
+            "threat_model": data.get("threat_model"),
+            "schedule": data.get("schedule"),
+        }
+
+    @cache
+    def fetch_code_quality_setup(self, repo):
+        """Fetch code quality setup (adjustable only)"""
+        cmd = ["gh", "api", f"/repos/{repo}/code-quality/setup"]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode == 404:
+            return None
+        if res.returncode != 0:
+            raise Exception(f"Failed to fetch code quality setup: {res.stderr.decode()}")
+        if not res.stdout.strip():
+            return None
+        data = json.loads(res.stdout)
+        return {
+            "state": data.get("state"),
+            "languages": data.get("languages"),
+            "runner_type": data.get("runner_type"),
+            "runner_label": data.get("runner_label"),
+            "schedule": data.get("schedule"),
+            "ai_findings_option": data.get("ai_findings_option"),
+        }
+
+    @cache
+    def fetch_actions_secrets(self, repo):
+        """Fetch Actions secrets (metadata only, no values)"""
+        cmd = ["gh", "api", "--paginate", f"/repos/{repo}/actions/secrets"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        data = json.loads(res.stdout)
+        return {
+            "total_count": data.get("total_count"),
+            "secrets": [
+                {
+                    "name": s.get("name"),
+                    "created_at": s.get("created_at"),
+                    "updated_at": s.get("updated_at"),
+                    "visibility": s.get("visibility"),
+                }
+                for s in data.get("secrets", [])
+            ],
+        }
+
+    @cache
+    def fetch_dependabot_secrets(self, repo):
+        """Fetch Dependabot secrets (metadata only, no values)"""
+        cmd = ["gh", "api", "--paginate", f"/repos/{repo}/dependabot/secrets"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        data = json.loads(res.stdout)
+        return {
+            "total_count": data.get("total_count"),
+            "secrets": [
+                {
+                    "name": s.get("name"),
+                    "created_at": s.get("created_at"),
+                    "updated_at": s.get("updated_at"),
+                    "visibility": s.get("visibility"),
+                }
+                for s in data.get("secrets", [])
+            ],
+        }
+
+    @cache
+    def fetch_codespaces_secrets(self, repo):
+        """Fetch Codespaces secrets (metadata only, no values)"""
+        cmd = ["gh", "api", "--paginate", f"/repos/{repo}/codespaces/secrets"]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode == 404:
+            return None
+        if res.returncode != 0:
+            raise Exception(f"Failed to fetch codespaces secrets: {res.stderr.decode()}")
+        if not res.stdout.strip():
+            return None
+        data = json.loads(res.stdout)
+        return {
+            "total_count": data.get("total_count"),
+            "secrets": [
+                {
+                    "name": s.get("name"),
+                    "created_at": s.get("created_at"),
+                    "updated_at": s.get("updated_at"),
+                    "visibility": s.get("visibility"),
+                }
+                for s in data.get("secrets", [])
+            ],
+        }
+
+    def _clean_org_secret(self, secret):
+        """Clean org secret to only adjustable fields"""
+        return {
+            "name": secret.get("name"),
+            "created_at": secret.get("created_at"),
+            "updated_at": secret.get("updated_at"),
+            "visibility": secret.get("visibility"),
+            "selected_repositories_url": secret.get("selected_repositories_url"),
+        }
+
+    @cache
+    def fetch_org_actions_secrets(self, org):
+        """Fetch organization-level Actions secrets (metadata only)"""
+        cmd = ["gh", "api", "--paginate", f"/orgs/{org}/actions/secrets"]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode in (403, 404):
+            return {"total_count": 0, "secrets": [], "note": "Requires admin:org scope or org admin access"}
+        if res.returncode != 0:
+            return {"total_count": 0, "secrets": [], "error": res.stderr.decode()}
+        if not res.stdout.strip():
+            return {"total_count": 0, "secrets": []}
+        data = json.loads(res.stdout)
+        return {
+            "total_count": data.get("total_count"),
+            "secrets": [self._clean_org_secret(s) for s in data.get("secrets", [])],
+        }
+
+    @cache
+    def fetch_org_dependabot_secrets(self, org):
+        """Fetch organization-level Dependabot secrets (metadata only)"""
+        cmd = ["gh", "api", "--paginate", f"/orgs/{org}/dependabot/secrets"]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode in (403, 404):
+            return {"total_count": 0, "secrets": [], "note": "Requires admin:org scope or org admin access"}
+        if res.returncode != 0:
+            return {"total_count": 0, "secrets": [], "error": res.stderr.decode()}
+        if not res.stdout.strip():
+            return {"total_count": 0, "secrets": []}
+        data = json.loads(res.stdout)
+        return {
+            "total_count": data.get("total_count"),
+            "secrets": [self._clean_org_secret(s) for s in data.get("secrets", [])],
+        }
+
+    @cache
+    def fetch_org_codespaces_secrets(self, org):
+        """Fetch organization-level Codespaces secrets (metadata only)"""
+        cmd = ["gh", "api", "--paginate", f"/orgs/{org}/codespaces/secrets"]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode in (403, 404):
+            return {"total_count": 0, "secrets": [], "note": "Requires admin:org scope or org admin access"}
+        if res.returncode != 0:
+            return {"total_count": 0, "secrets": [], "error": res.stderr.decode()}
+        if not res.stdout.strip():
+            return {"total_count": 0, "secrets": []}
+        data = json.loads(res.stdout)
+        return {
+            "total_count": data.get("total_count"),
+            "secrets": [self._clean_org_secret(s) for s in data.get("secrets", [])],
+        }
+
+    def fetch_all_settings(self, repo, branch="main"):
+        """Fetch all repository settings organized by GitHub settings pages"""
+        org = repo.split("/")[0]
+        return {
+            "general": self.fetch_repo(repo),
+            "collaborators": self.fetch_collaborators(repo),
+            "branches": {
+                "branch_protection": self.fetch_branch_protection(repo, branch),
+                "rulesets": self.fetch_rulesets(repo),
+            },
+            "actions": {
+                "general": self.fetch_actions_permissions(repo),
+                "workflow_permissions": self.fetch_actions_workflow_permissions(repo),
+                "access": self.fetch_actions_access_level(repo),
+                "secrets": self.fetch_actions_secrets(repo),
+            },
+            "webhooks": self.fetch_webhooks(repo),
+            "environments": self.fetch_environments(repo),
+            "security": {
+                "code_security": self.fetch_code_security_config(repo),
+                "code_scanning": self.fetch_code_scanning_setup(repo),
+                "code_quality": self.fetch_code_quality_setup(repo),
+                "dependabot_secrets": self.fetch_dependabot_secrets(repo),
+            },
+            "secrets": {
+                "actions": self.fetch_actions_secrets(repo),
+                "dependabot": self.fetch_dependabot_secrets(repo),
+                "codespaces": self.fetch_codespaces_secrets(repo),
+            },
+            "organization_secrets": {
+                "actions": self.fetch_org_actions_secrets(org),
+                "dependabot": self.fetch_org_dependabot_secrets(org),
+                "codespaces": self.fetch_org_codespaces_secrets(org),
+            },
+        }
+
+    @cache
     def _fetch_list_repos_page(self, page, org=None):
         """Fetch a single page of results"""
         if org is None:

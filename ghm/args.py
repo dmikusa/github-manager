@@ -7,6 +7,7 @@ import timeago
 import datetime
 import time
 import os
+import sys
 from prettytable import PrettyTable
 from .runner import GhRunner, GitRunner
 from .utils import load_repos, REPO_CONFIG_LOCATION, fetch_buildpack_toml
@@ -115,6 +116,51 @@ def handle_repos_toggle_branch_enforce_admin(args):
                 print("    Error: Could not enable bypass prevention")
         print()
     print("All repositories processed!")
+
+
+def handle_repos_settings_pull(args):
+    runner = GhRunner()
+    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+    branch = args.branch or "main"
+    for repo in repos:
+        print(f"Fetching settings for {repo}...", file=sys.stderr)
+        try:
+            settings = runner.fetch_all_settings(repo, branch)
+        except Exception as ex:
+            print(f"Error fetching settings for {repo}: {ex}", file=sys.stderr)
+            continue
+
+        output = json.dumps(settings, indent=2)
+        if args.output:
+            with open(args.output, "w") as f:
+                f.write(output)
+            print(f"Settings written to {args.output}", file=sys.stderr)
+        else:
+            print(output)
+
+
+def handle_repos_list(args):
+    parser = argparse.ArgumentParser(prog="manage.py repos list")
+    parser.add_argument(
+        "--repo", help="repo name"
+    )
+    parser.add_argument(
+        "--repo-filter", help="filter on repo name"
+    )
+    parser.add_argument(
+        "--branch",
+        help="branch to check (default: main)",
+        default="main",
+    )
+    parser.add_argument(
+        "--pr-list",
+        help="path to a file containing PR URLs to act on",
+        type=path_exists,
+    )
+    parser.add_argument(
+        "--json", help="output in json", action=argparse.BooleanOptionalAction
+    )
+    parser.print_help()
 
 
 def handle_repos_list_branch_enforce_admin(args):
@@ -856,9 +902,11 @@ def parse_args():
 
     subparser_repos_list = subparser_repos.add_parser(
         "list", help="list repo settings"
-    ).add_subparsers()
+    )
+    subparser_repos_list.set_defaults(func=handle_repos_list)
+    subparser_repos_list_sub = subparser_repos_list.add_subparsers()
 
-    subparser_repos_list_branch_enforce_admin = subparser_repos_list.add_parser(
+    subparser_repos_list_branch_enforce_admin = subparser_repos_list_sub.add_parser(
         "branch-enforce-admin",
         help="list enforce_admin setting for branch protection",
     )
@@ -909,6 +957,29 @@ def parse_args():
     subparser_repos_toggle_branch_enforce_admin.set_defaults(
         func=handle_repos_toggle_branch_enforce_admin
     )
+
+    subparser_repos_settings = subparser_repos.add_parser(
+        "settings", help="manage repository settings"
+    ).add_subparsers()
+
+    subparser_repos_settings_pull = subparser_repos_settings.add_parser(
+        "pull", help="pull repository settings to JSON"
+    )
+    subparser_repos_settings_pull.add_argument(
+        "--branch",
+        help="branch to fetch branch protection for (default: main)",
+        default="main",
+    )
+    subparser_repos_settings_pull.add_argument(
+        "--repo", help="repo name"
+    )
+    subparser_repos_settings_pull.add_argument(
+        "--repo-filter", help="filter on repo name"
+    )
+    subparser_repos_settings_pull.add_argument(
+        "-o", "--output", help="output file (default: stdout)"
+    )
+    subparser_repos_settings_pull.set_defaults(func=handle_repos_settings_pull)
 
     subparser_cache = subparsers.add_parser("cache", help="manage cache")
 

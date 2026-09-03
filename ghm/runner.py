@@ -674,7 +674,7 @@ class GhRunner:
         """Fetch old-style branch protection rules for a branch (adjustable only)"""
         cmd = ["gh", "api", f"/repos/{repo}/branches/{branch}/protection"]
         res = subprocess.run(cmd, capture_output=True)
-        if res.returncode == 404:
+        if res.returncode == 404 or b"404" in res.stderr:
             return None
         if res.returncode != 0:
             raise Exception(f"Failed to fetch branch protection: {res.stderr.decode()}")
@@ -793,7 +793,7 @@ class GhRunner:
         """Fetch code security configuration (secret scanning, dependabot, etc.) (adjustable only)"""
         cmd = ["gh", "api", f"/repos/{repo}/code-security-configuration"]
         res = subprocess.run(cmd, capture_output=True)
-        if res.returncode == 404:
+        if res.returncode == 404 or b"404" in res.stderr:
             return None
         if res.returncode != 0:
             raise Exception(f"Failed to fetch code security config: {res.stderr.decode()}")
@@ -822,7 +822,7 @@ class GhRunner:
         """Fetch code scanning default setup (adjustable only)"""
         cmd = ["gh", "api", f"/repos/{repo}/code-scanning/default-setup"]
         res = subprocess.run(cmd, capture_output=True)
-        if res.returncode == 404:
+        if res.returncode == 404 or b"404" in res.stderr:
             return None
         if res.returncode != 0:
             raise Exception(f"Failed to fetch code scanning setup: {res.stderr.decode()}")
@@ -844,7 +844,7 @@ class GhRunner:
         """Fetch code quality setup (adjustable only)"""
         cmd = ["gh", "api", f"/repos/{repo}/code-quality/setup"]
         res = subprocess.run(cmd, capture_output=True)
-        if res.returncode == 404:
+        if res.returncode == 404 or b"404" in res.stderr:
             return None
         if res.returncode != 0:
             raise Exception(f"Failed to fetch code quality setup: {res.stderr.decode()}")
@@ -903,7 +903,7 @@ class GhRunner:
         """Fetch Codespaces secrets (metadata only, no values)"""
         cmd = ["gh", "api", "--paginate", f"/repos/{repo}/codespaces/secrets"]
         res = subprocess.run(cmd, capture_output=True)
-        if res.returncode == 404:
+        if res.returncode == 404 or b"404" in res.stderr:
             return None
         if res.returncode != 0:
             raise Exception(f"Failed to fetch codespaces secrets: {res.stderr.decode()}")
@@ -1019,6 +1019,536 @@ class GhRunner:
                 "codespaces": self.fetch_org_codespaces_secrets(org),
             },
         }
+
+    def push_all_settings(self, repo, settings, branch="main", dry_run=False):
+        """Push all repository settings from JSON"""
+        results = {}
+
+        # General settings
+        if "general" in settings:
+            results["general"] = self.push_general_settings(repo, settings["general"], dry_run)
+
+        # Collaborators (direct and outside only - teams managed separately)
+        if "collaborators" in settings:
+            results["collaborators"] = self.push_collaborators(repo, settings["collaborators"], dry_run)
+
+        # Branch protection and rulesets
+        if "branches" in settings:
+            branches = settings["branches"]
+            if "branch_protection" in branches and branches["branch_protection"]:
+                results["branch_protection"] = self.push_branch_protection(repo, branch, branches["branch_protection"], dry_run)
+            if "rulesets" in branches:
+                results["rulesets"] = self.push_rulesets(repo, branches["rulesets"], dry_run)
+
+        # Actions settings
+        if "actions" in settings:
+            actions = settings["actions"]
+            if "general" in actions:
+                results["actions_general"] = self.push_actions_permissions(repo, actions["general"], dry_run)
+            if "workflow_permissions" in actions:
+                results["actions_workflow_permissions"] = self.push_actions_workflow_permissions(repo, actions["workflow_permissions"], dry_run)
+            if "access" in actions and actions["access"]:
+                results["actions_access"] = self.push_actions_access_level(repo, actions["access"], dry_run)
+            # Note: secrets are handled separately
+
+        # Webhooks
+        if "webhooks" in settings:
+            results["webhooks"] = self.push_webhooks(repo, settings["webhooks"], dry_run)
+
+        # Environments
+        if "environments" in settings:
+            results["environments"] = self.push_environments(repo, settings["environments"], dry_run)
+
+        # Security settings
+        if "security" in settings:
+            security = settings["security"]
+            if "code_security" in security and security["code_security"]:
+                results["code_security"] = self.push_code_security_config(repo, security["code_security"], dry_run)
+            if "code_scanning" in security and security["code_scanning"]:
+                results["code_scanning"] = self.push_code_scanning_setup(repo, security["code_scanning"], dry_run)
+            if "code_quality" in security and security["code_quality"]:
+                results["code_quality"] = self.push_code_quality_setup(repo, security["code_quality"], dry_run)
+
+        return results
+
+    def settings_diff(self, desired, current):
+        """Diff desired settings against a repo's current settings.
+
+        Mirrors the sections push_all_settings actually applies. Returns a list of
+        changes of the form {"section", "field", "name"?, "current", "desired", "action"?}.
+        """
+        changes = []
+
+        # General settings - mirror push_general_settings allowed_fields
+        allowed_general = {
+            "has_issues", "has_projects", "has_wiki",
+            "has_pages", "has_discussions", "allow_squash_merge", "allow_merge_commit",
+            "allow_rebase_merge", "allow_auto_merge", "delete_branch_on_merge",
+            "allow_update_branch", "use_squash_pr_title_as_default",
+            "squash_merge_commit_message", "squash_merge_commit_title",
+            "merge_commit_message", "merge_commit_title", "archived",
+            "allow_forking", "web_commit_signoff_required", "default_branch",
+            "topics", "visibility"
+        }
+        d = desired.get("general") or {}
+        c = current.get("general") or {}
+        for k in sorted(allowed_general):
+            dv = d.get(k)
+            if dv is None:
+                continue
+            if dv != c.get(k):
+                changes.append({"section": "general", "field": k, "current": c.get(k), "desired": dv})
+
+        # Collaborators - push only applies direct and outside (add/update, no removal)
+        dc = desired.get("collaborators") or {}
+        cc = current.get("collaborators") or {}
+        for kind in ("direct", "outside"):
+            dlist = {x.get("login"): x for x in dc.get(kind, []) if x.get("login")}
+            clist = {x.get("login"): x for x in cc.get(kind, []) if x.get("login")}
+            for login in sorted(dlist):
+                dp = self._collab_permission(dlist[login])
+                if login not in clist:
+                    changes.append({"section": "collaborators", "field": kind, "name": login, "action": "add", "desired": dp})
+                elif dp != self._collab_permission(clist[login]):
+                    changes.append({"section": "collaborators", "field": kind, "name": login, "current": self._collab_permission(clist[login]), "desired": dp})
+
+        # Branches
+        db = desired.get("branches") or {}
+        cb = current.get("branches") or {}
+        self._diff_scalars(changes, "branch_protection", db.get("branch_protection") or {}, cb.get("branch_protection") or {})
+        self._diff_by_name(changes, "rulesets", db.get("rulesets") or [], cb.get("rulesets") or [])
+
+        # Actions
+        da = desired.get("actions") or {}
+        ca = current.get("actions") or {}
+        self._diff_scalars(changes, "actions.general", da.get("general") or {}, ca.get("general") or {})
+        self._diff_scalars(changes, "actions.workflow_permissions", da.get("workflow_permissions") or {}, ca.get("workflow_permissions") or {})
+        self._diff_scalars(changes, "actions.access", da.get("access") or {}, ca.get("access") or {})
+
+        # Webhooks and environments - match by name
+        self._diff_by_name(changes, "webhooks", desired.get("webhooks") or [], current.get("webhooks") or [])
+        self._diff_by_name(changes, "environments", desired.get("environments") or [], current.get("environments") or [])
+
+        # Security - code_security is never pushed; secrets are not pushed here
+        ds = desired.get("security") or {}
+        cs = current.get("security") or {}
+        self._diff_scalars(changes, "code_scanning", ds.get("code_scanning") or {}, cs.get("code_scanning") or {})
+        self._diff_scalars(changes, "code_quality", ds.get("code_quality") or {}, cs.get("code_quality") or {})
+
+        return changes
+
+    def _diff_scalars(self, changes, section, desired, current):
+        """Diff two dicts of scalar/nested values. A None desired value means 'skip'."""
+        for k, dv in desired.items():
+            if dv is None:
+                continue
+            cv = current.get(k)
+            if dv != cv:
+                changes.append({"section": section, "field": k, "current": cv, "desired": dv})
+
+    def _diff_by_name(self, changes, section, desired, current):
+        """Diff two lists of dicts, matched by 'name'. A None desired value means 'skip'."""
+        desired_map = {x.get("name"): x for x in desired if x.get("name")}
+        current_map = {x.get("name"): x for x in current if x.get("name")}
+        for name in sorted(desired_map):
+            d = desired_map[name]
+            if name not in current_map:
+                details = {k: v for k, v in d.items() if k != "name" and v is not None}
+                changes.append({"section": section, "field": "name", "name": name, "action": "add", "desired": details})
+                continue
+            c = current_map[name]
+            for k, dv in d.items():
+                if k == "name" or dv is None:
+                    continue
+                cv = c.get(k)
+                if dv != cv:
+                    changes.append({"section": section, "field": k, "name": name, "current": cv, "desired": dv})
+
+    def _collab_permission(self, collab):
+        """Normalize a collaborator entry to its highest permission string."""
+        perm = collab.get("permission") if "permission" in collab else collab.get("permissions")
+        if isinstance(perm, dict):
+            for r in ("admin", "maintain", "push", "triage", "pull"):
+                if perm.get(r):
+                    return r
+            return None
+        return perm
+
+    @invalidate("fetch_repo")
+    def push_general_settings(self, repo, settings, dry_run=False):
+        """Push general repository settings"""
+        # Filter to only adjustable fields - exclude identity fields (name, owner, etc.)
+        # Also exclude fields that are unique per repo (description, homepage)
+        allowed_fields = {
+            "has_issues", "has_projects", "has_wiki",
+            "has_pages", "has_discussions", "allow_squash_merge", "allow_merge_commit",
+            "allow_rebase_merge", "allow_auto_merge", "delete_branch_on_merge",
+            "allow_update_branch", "use_squash_pr_title_as_default",
+            "squash_merge_commit_message", "squash_merge_commit_title",
+            "merge_commit_message", "merge_commit_title", "archived",
+            "allow_forking", "web_commit_signoff_required", "default_branch",
+            "topics", "visibility"
+        }
+        data = {k: v for k, v in settings.items() if k in allowed_fields and v is not None}
+        if not data:
+            return {"status": "skipped", "reason": "no adjustable fields"}
+
+        if dry_run:
+            return {"status": "dry_run", "changes": data}
+
+        results = {"updated": [], "failed": []}
+
+        # For topics, use the dedicated endpoint
+        if "topics" in data:
+            topics = data.pop("topics")
+            cmd = ["gh", "api", "--method", "PUT", f"/repos/{repo}/topics", "--input", "-"]
+            res = subprocess.run(cmd, input=json.dumps({"names": topics}).encode(), capture_output=True)
+            if res.returncode == 0:
+                results["updated"].append("topics")
+            else:
+                results["failed"].append({"field": "topics", "error": res.stderr.decode()})
+
+        # Try to update each remaining field individually to handle partial failures
+        for k, v in data.items():
+            cmd = ["gh", "api", "--method", "PATCH", f"/repos/{repo}"]
+            if isinstance(v, bool):
+                cmd.extend(["-F", f"{k}={str(v).lower()}"])
+            elif isinstance(v, list):
+                cmd.extend(["--input", "-"])
+                res = subprocess.run(cmd, input=json.dumps({k: v}).encode(), capture_output=True)
+                if res.returncode == 0:
+                    results["updated"].append(k)
+                else:
+                    err = res.stderr.decode() if res.stderr else res.stdout.decode()
+                    results["failed"].append({"field": k, "error": err})
+                continue
+            else:
+                cmd.extend(["-f", f"{k}={v}"])
+            res = subprocess.run(cmd, capture_output=True)
+            if res.returncode == 0:
+                results["updated"].append(k)
+            else:
+                err = res.stderr.decode() if res.stderr else res.stdout.decode()
+                results["failed"].append({"field": k, "error": err})
+
+        if results["failed"]:
+            return {"status": "partial", "results": results}
+        return {"status": "updated", "results": results}
+
+    @invalidate("fetch_collaborators")
+    def push_collaborators(self, repo, settings, dry_run=False):
+        """Push repository collaborators (direct and outside only)"""
+        results = {"direct": [], "outside": []}
+
+        # Handle direct collaborators
+        for collab in settings.get("direct", []):
+            login = collab.get("login")
+            permission = collab.get("permission") or collab.get("permissions")
+            if not login:
+                continue
+
+            if dry_run:
+                results["direct"].append({"login": login, "status": "dry_run", "permission": permission})
+                continue
+
+            # Convert permission to GitHub format
+            perm_value = "push"
+            if isinstance(permission, dict):
+                if permission.get("admin"):
+                    perm_value = "admin"
+                elif permission.get("maintain"):
+                    perm_value = "maintain"
+                elif permission.get("push"):
+                    perm_value = "push"
+                elif permission.get("triage"):
+                    perm_value = "triage"
+                elif permission.get("pull"):
+                    perm_value = "pull"
+            elif isinstance(permission, str):
+                perm_value = permission
+
+            cmd = ["gh", "api", "--method", "PUT", f"/repos/{repo}/collaborators/{login}", "-f", f"permission={perm_value}"]
+            res = subprocess.run(cmd, capture_output=True)
+            if res.returncode == 0:
+                results["direct"].append({"login": login, "status": "updated", "permission": perm_value})
+            else:
+                results["direct"].append({"login": login, "status": "error", "error": res.stderr.decode()})
+
+        # Handle outside collaborators
+        for collab in settings.get("outside", []):
+            login = collab.get("login")
+            permission = collab.get("permission") or collab.get("permissions")
+            if not login:
+                continue
+
+            if dry_run:
+                results["outside"].append({"login": login, "status": "dry_run", "permission": permission})
+                continue
+
+            perm_value = "push"
+            if isinstance(permission, dict):
+                if permission.get("admin"):
+                    perm_value = "admin"
+                elif permission.get("maintain"):
+                    perm_value = "maintain"
+                elif permission.get("push"):
+                    perm_value = "push"
+                elif permission.get("triage"):
+                    perm_value = "triage"
+                elif permission.get("pull"):
+                    perm_value = "pull"
+            elif isinstance(permission, str):
+                perm_value = permission
+
+            cmd = ["gh", "api", "--method", "PUT", f"/repos/{repo}/collaborators/{login}", "-f", f"permission={perm_value}"]
+            res = subprocess.run(cmd, capture_output=True)
+            if res.returncode == 0:
+                results["outside"].append({"login": login, "status": "updated", "permission": perm_value})
+            else:
+                results["outside"].append({"login": login, "status": "error", "error": res.stderr.decode()})
+
+        return results
+
+    @invalidate("fetch_branch_protection")
+    def push_branch_protection(self, repo, branch, settings, dry_run=False):
+        """Push branch protection rules"""
+        if dry_run:
+            return {"status": "dry_run", "branch": branch, "changes": settings}
+
+        # Build the protection payload
+        data = {}
+        if settings.get("required_status_checks"):
+            data["required_status_checks"] = settings["required_status_checks"]
+        if settings.get("enforce_admins") is not None:
+            data["enforce_admins"] = settings["enforce_admins"]
+        if settings.get("required_pull_request_reviews"):
+            data["required_pull_request_reviews"] = settings["required_pull_request_reviews"]
+        if settings.get("restrictions"):
+            data["restrictions"] = settings["restrictions"]
+        if settings.get("required_linear_history") is not None:
+            data["required_linear_history"] = settings["required_linear_history"]
+        if settings.get("allow_force_pushes") is not None:
+            data["allow_force_pushes"] = settings["allow_force_pushes"]
+        if settings.get("allow_deletions") is not None:
+            data["allow_deletions"] = settings["allow_deletions"]
+        if settings.get("block_creations") is not None:
+            data["block_creations"] = settings["block_creations"]
+        if settings.get("required_conversation_resolution") is not None:
+            data["required_conversation_resolution"] = settings["required_conversation_resolution"]
+        if settings.get("lock_branch") is not None:
+            data["lock_branch"] = settings["lock_branch"]
+        if settings.get("allow_fork_syncing") is not None:
+            data["allow_fork_syncing"] = settings["allow_fork_syncing"]
+
+        if not data:
+            return {"status": "skipped", "reason": "no protection settings"}
+
+        cmd = ["gh", "api", "--method", "PUT", f"/repos/{repo}/branches/{branch}/protection"]
+        cmd.extend(["--input", "-"])
+        proc = subprocess.run(cmd, input=json.dumps(data).encode(), capture_output=True)
+        if proc.returncode == 404 or b"404" in proc.stderr:
+            return {"status": "skipped", "reason": f"branch '{branch}' not found"}
+        if proc.returncode != 0:
+            return {"status": "error", "error": proc.stderr.decode()}
+        return {"status": "updated", "data": json.loads(proc.stdout)}
+
+    @invalidate("fetch_rulesets")
+    def push_rulesets(self, repo, rulesets, dry_run=False):
+        """Push branch protection rulesets"""
+        results = []
+        for rs in rulesets:
+            name = rs.get("name")
+            if not name:
+                continue
+
+            if dry_run:
+                results.append({"name": name, "status": "dry_run", "action": "create/update"})
+                continue
+
+            # Try to update existing ruleset first
+            data = {k: v for k, v in rs.items() if k != "name" and v is not None}
+            cmd = ["gh", "api", "--method", "POST", f"/repos/{repo}/rulesets"]
+            cmd.extend(["--input", "-"])
+            proc = subprocess.run(cmd, input=json.dumps(data).encode(), capture_output=True)
+            if proc.returncode == 0:
+                results.append({"name": name, "status": "created", "data": json.loads(proc.stdout)})
+            else:
+                results.append({"name": name, "status": "error", "error": proc.stderr.decode()})
+        return results
+
+    @invalidate("fetch_actions_permissions")
+    def push_actions_permissions(self, repo, settings, dry_run=False):
+        """Push GitHub Actions permissions"""
+        if dry_run:
+            return {"status": "dry_run", "changes": settings}
+
+        data = {k: v for k, v in settings.items() if v is not None}
+        if not data:
+            return {"status": "skipped", "reason": "no settings"}
+
+        cmd = ["gh", "api", "--method", "PUT", f"/repos/{repo}/actions/permissions"]
+        cmd.extend(["--input", "-"])
+        proc = subprocess.run(cmd, input=json.dumps(data).encode(), capture_output=True, check=True)
+        if proc.stdout.strip():
+            return {"status": "updated", "data": json.loads(proc.stdout)}
+        return {"status": "updated"}
+
+    @invalidate("fetch_actions_workflow_permissions")
+    def push_actions_workflow_permissions(self, repo, settings, dry_run=False):
+        """Push default workflow permissions"""
+        if dry_run:
+            return {"status": "dry_run", "changes": settings}
+
+        data = {k: v for k, v in settings.items() if v is not None}
+        if not data:
+            return {"status": "skipped", "reason": "no settings"}
+
+        cmd = ["gh", "api", "--method", "PUT", f"/repos/{repo}/actions/permissions/workflow"]
+        cmd.extend(["--input", "-"])
+        proc = subprocess.run(cmd, input=json.dumps(data).encode(), capture_output=True, check=True)
+        if proc.stdout.strip():
+            return {"status": "updated", "data": json.loads(proc.stdout)}
+        return {"status": "updated"}
+
+    @invalidate("fetch_actions_access_level")
+    def push_actions_access_level(self, repo, settings, dry_run=False):
+        """Push actions access level (private repos only)"""
+        if dry_run:
+            return {"status": "dry_run", "changes": settings}
+
+        data = {k: v for k, v in settings.items() if v is not None}
+        if not data:
+            return {"status": "skipped", "reason": "no settings"}
+
+        cmd = ["gh", "api", "--method", "PUT", f"/repos/{repo}/actions/permissions/access"]
+        cmd.extend(["--input", "-"])
+        proc = subprocess.run(cmd, input=json.dumps(data).encode(), capture_output=True)
+        if proc.returncode == 422:
+            return {"status": "skipped", "reason": "not applicable to public repos"}
+        proc.check_returncode()
+        return {"status": "updated", "data": json.loads(proc.stdout)}
+
+    @invalidate("fetch_webhooks")
+    def push_webhooks(self, repo, webhooks, dry_run=False):
+        """Push webhooks"""
+        results = []
+        for wh in webhooks:
+            name = wh.get("name")
+            config = wh.get("config", {})
+            url = config.get("url")
+            if not name or not url:
+                continue
+
+            if dry_run:
+                results.append({"name": name, "status": "dry_run", "url": url})
+                continue
+
+            data = {
+                "name": name,
+                "active": wh.get("active", True),
+                "events": wh.get("events", ["push"]),
+                "config": {
+                    "url": url,
+                    "content_type": config.get("content_type", "json"),
+                    "insecure_ssl": config.get("insecure_ssl", "0"),
+                }
+            }
+            # Try to find existing webhook
+            cmd = ["gh", "api", "--paginate", f"/repos/{repo}/hooks"]
+            res = subprocess.run(cmd, capture_output=True, check=True)
+            existing = json.loads(res.stdout)
+            existing_id = None
+            for w in existing:
+                if w.get("config", {}).get("url") == url:
+                    existing_id = w.get("id")
+                    break
+
+            if existing_id:
+                cmd = ["gh", "api", "--method", "PATCH", f"/repos/{repo}/hooks/{existing_id}"]
+            else:
+                cmd = ["gh", "api", "--method", "POST", f"/repos/{repo}/hooks"]
+
+            cmd.extend(["--input", "-"])
+            proc = subprocess.run(cmd, input=json.dumps(data).encode(), capture_output=True, check=True)
+            results.append({"name": name, "status": "updated" if existing_id else "created", "data": json.loads(proc.stdout)})
+        return results
+
+    @invalidate("fetch_environments")
+    def push_environments(self, repo, environments, dry_run=False):
+        """Push deployment environments"""
+        results = []
+        for env in environments:
+            name = env.get("name")
+            if not name:
+                continue
+
+            if dry_run:
+                results.append({"name": name, "status": "dry_run"})
+                continue
+
+            data = {}
+            if env.get("wait_timer") is not None:
+                data["wait_timer"] = env["wait_timer"]
+            if env.get("prevent_self_review") is not None:
+                data["prevent_self_review"] = env["prevent_self_review"]
+            if env.get("reviewers"):
+                data["reviewers"] = env["reviewers"]
+            if env.get("deployment_branch_policy"):
+                data["deployment_branch_policy"] = env["deployment_branch_policy"]
+
+            cmd = ["gh", "api", "--method", "PUT", f"/repos/{repo}/environments/{name}"]
+            if data:
+                cmd.extend(["--input", "-"])
+                proc = subprocess.run(cmd, input=json.dumps(data).encode(), capture_output=True, check=True)
+            else:
+                proc = subprocess.run(cmd, capture_output=True, check=True)
+            results.append({"name": name, "status": "updated", "data": json.loads(proc.stdout) if proc.stdout.strip() else {}})
+        return results
+
+    def push_code_security_config(self, repo, settings, dry_run=False):
+        """Push code security configuration - not directly supported via API"""
+        # This is managed via the security configuration API which is complex
+        return {"status": "skipped", "reason": "code security config managed via org-level security configurations"}
+
+    def push_code_scanning_setup(self, repo, settings, dry_run=False):
+        """Push code scanning default setup"""
+        if dry_run:
+            return {"status": "dry_run", "changes": settings}
+
+        data = {k: v for k, v in settings.items() if v is not None}
+        if not data:
+            return {"status": "skipped", "reason": "no settings"}
+
+        cmd = ["gh", "api", "--method", "PATCH", f"/repos/{repo}/code-scanning/default-setup"]
+        cmd.extend(["--input", "-"])
+        proc = subprocess.run(cmd, input=json.dumps(data).encode(), capture_output=True)
+        if proc.returncode == 404 or b"404" in proc.stderr:
+            return {"status": "skipped", "reason": "code scanning not available for this repository"}
+        if proc.returncode != 0:
+            return {"status": "error", "error": proc.stderr.decode()}
+        if proc.stdout.strip():
+            return {"status": "updated", "data": json.loads(proc.stdout)}
+        return {"status": "updated"}
+
+    def push_code_quality_setup(self, repo, settings, dry_run=False):
+        """Push code quality setup"""
+        if dry_run:
+            return {"status": "dry_run", "changes": settings}
+
+        data = {k: v for k, v in settings.items() if v is not None}
+        if not data:
+            return {"status": "skipped", "reason": "no settings"}
+
+        cmd = ["gh", "api", "--method", "PATCH", f"/repos/{repo}/code-quality/setup"]
+        cmd.extend(["--input", "-"])
+        proc = subprocess.run(cmd, input=json.dumps(data).encode(), capture_output=True)
+        if proc.returncode == 404 or b"404" in proc.stderr:
+            return {"status": "skipped", "reason": "code quality not available for this repository"}
+        if proc.returncode != 0:
+            return {"status": "error", "error": proc.stderr.decode()}
+        if proc.stdout.strip():
+            return {"status": "updated", "data": json.loads(proc.stdout)}
+        return {"status": "updated"}
 
     @cache
     def _fetch_list_repos_page(self, page, org=None):

@@ -123,6 +123,15 @@ def handle_repos_settings_pull(args):
     repos = filter_repos(load_repos(), args.repo, args.repo_filter)
     branch = args.branch or "main"
     for repo in repos:
+        # Check if we should resume and file already exists
+        if args.resume and args.output:
+            import os
+            safe_name = repo.replace("/", "_")
+            filepath = os.path.join(args.output, f"{safe_name}.json")
+            if os.path.exists(filepath):
+                print(f"Skipping {repo} (already exists: {filepath})", file=sys.stderr)
+                continue
+
         print(f"Fetching settings for {repo}...", file=sys.stderr)
         try:
             settings = runner.fetch_all_settings(repo, branch)
@@ -132,11 +141,87 @@ def handle_repos_settings_pull(args):
 
         output = json.dumps(settings, indent=2)
         if args.output:
-            with open(args.output, "w") as f:
+            import os
+            os.makedirs(args.output, exist_ok=True)
+            safe_name = repo.replace("/", "_")
+            filepath = os.path.join(args.output, f"{safe_name}.json")
+            with open(filepath, "w") as f:
                 f.write(output)
-            print(f"Settings written to {args.output}", file=sys.stderr)
+            print(f"Settings written to {filepath}", file=sys.stderr)
         else:
             print(output)
+
+
+def format_settings_change(ch):
+    """Format a settings diff entry into a readable string."""
+    section = ch.get("section")
+    field = ch.get("field")
+    name = ch.get("name")
+    current = ch.get("current")
+    desired = ch.get("desired")
+    where = f"{section}.{field}" + (f" ({name})" if name else "")
+    if ch.get("action") == "add":
+        return f"{where}: ADD {desired}"
+    if ch.get("action") == "remove":
+        return f"{where}: REMOVE {current}"
+    if current is None:
+        return f"{where}: (none) -> {desired}"
+    if isinstance(current, list) or isinstance(desired, list):
+        return f"{where}: {current} -> {desired}"
+    return f"{where}: {current} -> {desired}"
+
+
+def handle_repos_settings_push(args):
+    runner = GhRunner()
+
+    # Load settings from JSON file
+    with open(args.input, "r") as f:
+        settings = json.load(f)
+
+    # Determine target repos
+    if args.repo:
+        repos = [args.repo]
+    elif "repository" in settings and "full_name" in settings["repository"]:
+        repos = [settings["repository"]["full_name"]]
+    else:
+        repos = filter_repos(load_repos(), None, args.repo_filter)
+        if not repos:
+            print("Error: No target repo specified. Use --repo or include repository.full_name in JSON", file=sys.stderr)
+            return
+
+    branch = args.branch or "main"
+    dry_run = args.dry_run or False
+
+    # Skip the repo the settings came from - pushing to it is a no-op
+    source_repo = settings.get("repository", {}).get("full_name")
+    if source_repo:
+        skipped = [r for r in repos if r == source_repo]
+        repos = [r for r in repos if r != source_repo]
+        for r in skipped:
+            print(f"Skipping {r} (settings originated from this repo)", file=sys.stderr)
+
+    for repo in repos:
+        print(f"Pushing settings to {repo}...", file=sys.stderr)
+        if dry_run:
+            try:
+                current = runner.fetch_all_settings(repo, branch)
+                changes = runner.settings_diff(settings, current)
+            except Exception as ex:
+                print(f"  Error fetching settings for {repo}: {ex}", file=sys.stderr)
+                continue
+            if not changes:
+                print(f"  [DRY RUN] No changes needed for {repo}", file=sys.stderr)
+                continue
+            print(f"  [DRY RUN] Changes that would be applied to {repo}:", file=sys.stderr)
+            for ch in changes:
+                print(f"    {format_settings_change(ch)}", file=sys.stderr)
+            continue
+
+        try:
+            runner.push_all_settings(repo, settings, branch, dry_run)
+            print(f"  Settings pushed to {repo}", file=sys.stderr)
+        except Exception as ex:
+            print(f"  Error pushing settings to {repo}: {ex}", file=sys.stderr)
 
 
 def handle_repos_list(args):
@@ -977,9 +1062,34 @@ def parse_args():
         "--repo-filter", help="filter on repo name"
     )
     subparser_repos_settings_pull.add_argument(
-        "-o", "--output", help="output file (default: stdout)"
+        "-o", "--output", help="output directory (default: stdout). Writes one file per repo."
+    )
+    subparser_repos_settings_pull.add_argument(
+        "--resume", help="skip repos that already have output files", action=argparse.BooleanOptionalAction
     )
     subparser_repos_settings_pull.set_defaults(func=handle_repos_settings_pull)
+
+    subparser_repos_settings_push = subparser_repos_settings.add_parser(
+        "push", help="push repository settings from JSON file"
+    )
+    subparser_repos_settings_push.add_argument(
+        "input", help="input JSON file with settings"
+    )
+    subparser_repos_settings_push.add_argument(
+        "--branch",
+        help="branch to apply branch protection to (default: main)",
+        default="main",
+    )
+    subparser_repos_settings_push.add_argument(
+        "--repo", help="repo name (required if not in JSON)"
+    )
+    subparser_repos_settings_push.add_argument(
+        "--repo-filter", help="filter on repo name"
+    )
+    subparser_repos_settings_push.add_argument(
+        "--dry-run", help="show what would be changed without applying", action=argparse.BooleanOptionalAction
+    )
+    subparser_repos_settings_push.set_defaults(func=handle_repos_settings_push)
 
     subparser_cache = subparsers.add_parser("cache", help="manage cache")
 

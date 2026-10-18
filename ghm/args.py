@@ -7,6 +7,7 @@ import timeago
 import datetime
 import time
 import os
+import sys
 from prettytable import PrettyTable
 from .runner import GhRunner, GitRunner
 from .utils import load_repos, REPO_CONFIG_LOCATION, fetch_buildpack_toml
@@ -115,6 +116,193 @@ def handle_repos_toggle_branch_enforce_admin(args):
                 print("    Error: Could not enable bypass prevention")
         print()
     print("All repositories processed!")
+
+
+def handle_repos_settings_pull(args):
+    runner = GhRunner()
+    repos = filter_repos(load_repos(), args.repo, args.repo_filter)
+    branch = args.branch or "main"
+    for repo in repos:
+        # Check if we should resume and file already exists
+        if args.resume and args.output:
+            import os
+            safe_name = repo.replace("/", "_")
+            filepath = os.path.join(args.output, f"{safe_name}.json")
+            if os.path.exists(filepath):
+                print(f"Skipping {repo} (already exists: {filepath})", file=sys.stderr)
+                continue
+
+        print(f"Fetching settings for {repo}...", file=sys.stderr)
+        try:
+            settings = runner.fetch_all_settings(repo, branch)
+        except Exception as ex:
+            print(f"Error fetching settings for {repo}: {ex}", file=sys.stderr)
+            continue
+
+        output = json.dumps(settings, indent=2)
+        if args.output:
+            import os
+            os.makedirs(args.output, exist_ok=True)
+            safe_name = repo.replace("/", "_")
+            filepath = os.path.join(args.output, f"{safe_name}.json")
+            with open(filepath, "w") as f:
+                f.write(output)
+            print(f"Settings written to {filepath}", file=sys.stderr)
+        else:
+            print(output)
+
+
+def format_settings_change(ch):
+    """Format a settings diff entry into a readable string."""
+    section = ch.get("section")
+    field = ch.get("field")
+    name = ch.get("name")
+    current = ch.get("current")
+    desired = ch.get("desired")
+    where = f"{section}.{field}" + (f" ({name})" if name else "")
+    if ch.get("action") == "add":
+        return f"{where}: ADD {desired}"
+    if ch.get("action") == "remove":
+        return f"{where}: REMOVE {current}"
+    if current is None:
+        return f"{where}: (none) -> {desired}"
+    if isinstance(current, list) or isinstance(desired, list):
+        return f"{where}: {current} -> {desired}"
+    return f"{where}: {current} -> {desired}"
+
+
+def format_push_results(results):
+    """Format push results into readable lines, highlighting failures."""
+    lines = []
+    for section, result in results.items():
+        if isinstance(result, dict) and result.get("status") == "error":
+            lines.append(f"    {section}: ERROR: {result.get('error', '').strip()}")
+            continue
+        if isinstance(result, dict) and result.get("status") == "partial":
+            lines.append(f"    {section}: PARTIAL")
+            for f in result.get("results", {}).get("failed", []):
+                lines.append(f"      {f.get('field')}: ERROR: {f.get('error', '').strip()}")
+            continue
+        if isinstance(result, list):
+            errors = [r for r in result if r.get("status") == "error"]
+            done = [r for r in result if r.get("status") != "error"]
+            summary = ", ".join(
+                sorted({f"{r.get('status')}" for r in done})
+            ) or "no changes"
+            lines.append(f"    {section}: {summary} ({len(done)} ok, {len(errors)} failed)")
+            for r in errors:
+                who = r.get("name") or r.get("slug") or r.get("login") or "?"
+                lines.append(f"      {who}: ERROR: {r.get('error', '').strip()}")
+            continue
+        status = result.get("status") if isinstance(result, dict) else result
+        detail = ""
+        if isinstance(result, dict) and result.get("reason"):
+            detail = f" ({result['reason']})"
+        lines.append(f"    {section}: {status}{detail}")
+    return lines
+
+
+def handle_repos_settings_push(args):
+    runner = GhRunner()
+
+    # Load settings from JSON file
+    with open(args.input, "r") as f:
+        settings = json.load(f)
+
+    # Determine target repos
+    if args.repo:
+        repos = [args.repo]
+    elif "repository" in settings and "full_name" in settings["repository"]:
+        repos = [settings["repository"]["full_name"]]
+    elif args.repo_filter:
+        repos = filter_repos(load_repos(), None, args.repo_filter)
+    else:
+        print(
+            "Error: No target repo specified. Use --repo, --repo-filter,"
+            " or include repository.full_name in the JSON",
+            file=sys.stderr,
+        )
+        return
+
+    branch = args.branch or "main"
+    dry_run = args.dry_run or False
+    complete = args.complete or False
+
+    if not complete:
+        print(
+            "Per-repo settings (topics, collaborators, teams) will be skipped."
+            " Pass --complete to apply them.",
+            file=sys.stderr,
+        )
+
+    # Skip the repo the settings came from - pushing to it is a no-op
+    source_repo = settings.get("repository", {}).get("full_name")
+    if source_repo:
+        skipped = [r for r in repos if r == source_repo]
+        repos = [r for r in repos if r != source_repo]
+        for r in skipped:
+            print(f"Skipping {r} (settings originated from this repo)", file=sys.stderr)
+
+    for repo in repos:
+        print(f"Pushing settings to {repo}...", file=sys.stderr)
+        if dry_run:
+            try:
+                current = runner.fetch_all_settings(repo, branch)
+                changes = runner.settings_diff(settings, current, complete=complete)
+            except Exception as ex:
+                print(f"  Error fetching settings for {repo}: {ex}", file=sys.stderr)
+                continue
+            if not changes:
+                print(f"  [DRY RUN] No changes needed for {repo}", file=sys.stderr)
+                continue
+            print(f"  [DRY RUN] Changes that would be applied to {repo}:", file=sys.stderr)
+            for ch in changes:
+                print(f"    {format_settings_change(ch)}", file=sys.stderr)
+            continue
+
+        try:
+            results = runner.push_all_settings(repo, settings, branch, dry_run, complete)
+        except Exception as ex:
+            print(f"  Error pushing settings to {repo}: {ex}", file=sys.stderr)
+            continue
+
+        failed = any(
+            (isinstance(r, dict) and r.get("status") in ("error", "partial"))
+            or (isinstance(r, list) and any(x.get("status") == "error" for x in r))
+            for r in results.values()
+        )
+        header = "  Settings pushed to"
+        print(f"{header} {repo}:", file=sys.stderr)
+        for line in format_push_results(results):
+            print(line, file=sys.stderr)
+        if failed:
+            print(f"  Done with errors for {repo}", file=sys.stderr)
+        else:
+            print(f"  Done for {repo}", file=sys.stderr)
+
+
+def handle_repos_list(args):
+    parser = argparse.ArgumentParser(prog="manage.py repos list")
+    parser.add_argument(
+        "--repo", help="repo name"
+    )
+    parser.add_argument(
+        "--repo-filter", help="filter on repo name"
+    )
+    parser.add_argument(
+        "--branch",
+        help="branch to check (default: main)",
+        default="main",
+    )
+    parser.add_argument(
+        "--pr-list",
+        help="path to a file containing PR URLs to act on",
+        type=path_exists,
+    )
+    parser.add_argument(
+        "--json", help="output in json", action=argparse.BooleanOptionalAction
+    )
+    parser.print_help()
 
 
 def handle_repos_list_branch_enforce_admin(args):
@@ -856,9 +1044,11 @@ def parse_args():
 
     subparser_repos_list = subparser_repos.add_parser(
         "list", help="list repo settings"
-    ).add_subparsers()
+    )
+    subparser_repos_list.set_defaults(func=handle_repos_list)
+    subparser_repos_list_sub = subparser_repos_list.add_subparsers()
 
-    subparser_repos_list_branch_enforce_admin = subparser_repos_list.add_parser(
+    subparser_repos_list_branch_enforce_admin = subparser_repos_list_sub.add_parser(
         "branch-enforce-admin",
         help="list enforce_admin setting for branch protection",
     )
@@ -909,6 +1099,59 @@ def parse_args():
     subparser_repos_toggle_branch_enforce_admin.set_defaults(
         func=handle_repos_toggle_branch_enforce_admin
     )
+
+    subparser_repos_settings = subparser_repos.add_parser(
+        "settings", help="manage repository settings"
+    ).add_subparsers()
+
+    subparser_repos_settings_pull = subparser_repos_settings.add_parser(
+        "pull", help="pull repository settings to JSON"
+    )
+    subparser_repos_settings_pull.add_argument(
+        "--branch",
+        help="branch to fetch branch protection for (default: main)",
+        default="main",
+    )
+    subparser_repos_settings_pull.add_argument(
+        "--repo", help="repo name"
+    )
+    subparser_repos_settings_pull.add_argument(
+        "--repo-filter", help="filter on repo name"
+    )
+    subparser_repos_settings_pull.add_argument(
+        "-o", "--output", help="output directory (default: stdout). Writes one file per repo."
+    )
+    subparser_repos_settings_pull.add_argument(
+        "--resume", help="skip repos that already have output files", action=argparse.BooleanOptionalAction
+    )
+    subparser_repos_settings_pull.set_defaults(func=handle_repos_settings_pull)
+
+    subparser_repos_settings_push = subparser_repos_settings.add_parser(
+        "push", help="push repository settings from JSON file"
+    )
+    subparser_repos_settings_push.add_argument(
+        "input", help="input JSON file with settings"
+    )
+    subparser_repos_settings_push.add_argument(
+        "--branch",
+        help="branch to apply branch protection to (default: main)",
+        default="main",
+    )
+    subparser_repos_settings_push.add_argument(
+        "--repo", help="repo name (required if not in JSON)"
+    )
+    subparser_repos_settings_push.add_argument(
+        "--repo-filter", help="filter on repo name"
+    )
+    subparser_repos_settings_push.add_argument(
+        "--dry-run", help="show what would be changed without applying", action=argparse.BooleanOptionalAction
+    )
+    subparser_repos_settings_push.add_argument(
+        "--complete",
+        help="also apply per-repo settings (topics, collaborators, teams)",
+        action=argparse.BooleanOptionalAction,
+    )
+    subparser_repos_settings_push.set_defaults(func=handle_repos_settings_push)
 
     subparser_cache = subparsers.add_parser("cache", help="manage cache")
 

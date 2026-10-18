@@ -1,4 +1,5 @@
 import argparse
+import getpass
 import hashlib
 import json
 import re
@@ -279,6 +280,140 @@ def handle_repos_settings_push(args):
             print(f"  Done with errors for {repo}", file=sys.stderr)
         else:
             print(f"  Done for {repo}", file=sys.stderr)
+
+
+def read_secret_value(what):
+    """Read a value securely, from STDIN or an interactive prompt.
+
+    When input is piped in, the value is read from STDIN so the command can be
+    scripted. Otherwise the value is read from the terminal without echoing.
+    `what` describes the value being read, e.g. `secret 'FOO'`.
+    """
+    if not sys.stdin.isatty():
+        return sys.stdin.read().rstrip("\r\n")
+
+    value = getpass.getpass(f"Enter value for {what}: ")
+    confirm = getpass.getpass(f"Confirm value for {what}: ")
+    if value != confirm:
+        print("Error: values do not match", file=sys.stderr)
+        sys.exit(1)
+    return value
+
+
+def _handle_repos_secrets(args, must_exist):
+    runner = GhRunner()
+    repo = args.repo
+    name = args.name
+    secret_type = args.type
+
+    try:
+        exists = runner.secret_exists(repo, name, secret_type)
+    except Exception as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        sys.exit(1)
+
+    if must_exist and not exists:
+        print(
+            f"Error: secret '{name}' does not exist in {repo} ({secret_type})."
+            " Use `repos secrets create` to create it.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if not must_exist and exists:
+        print(
+            f"Error: secret '{name}' already exists in {repo} ({secret_type})."
+            " Use `repos secrets update` to change it.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    value = read_secret_value(f"secret '{name}'")
+    if not value:
+        print(
+            "Error: no secret value provided. Pipe the value on STDIN"
+            " or enter it at the prompt.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        runner.secret_set(repo, name, value, secret_type)
+    except Exception as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        sys.exit(1)
+
+    verb = "Updated" if must_exist else "Created"
+    print(f"{verb} {secret_type} secret '{name}' in {repo}", file=sys.stderr)
+
+
+def handle_repos_secrets_create(args):
+    _handle_repos_secrets(args, must_exist=False)
+
+
+def handle_repos_secrets_update(args):
+    _handle_repos_secrets(args, must_exist=True)
+
+
+SECRET_TYPES = ["actions", "agents", "codespaces", "dependabot"]
+
+
+def _parse_gh_timestamp(value):
+    if not value:
+        return None
+    try:
+        return datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return None
+
+
+def _format_secret_time(value):
+    parsed = _parse_gh_timestamp(value)
+    return parsed.strftime("%Y-%m-%d %H:%M") if parsed else "-"
+
+
+def _format_secret_age(value):
+    parsed = _parse_gh_timestamp(value)
+    if not parsed:
+        return "-"
+    return timeago.format(parsed, datetime.datetime.utcnow())
+
+
+def handle_repos_secrets_list(args):
+    runner = GhRunner()
+    repo = args.repo
+    types = SECRET_TYPES if args.type == "all" else [args.type]
+
+    pt = PrettyTable()
+    pt.field_names = ["NAME", "TYPE", "CREATED", "UPDATED", "AGE"]
+    for column in ("NAME", "TYPE", "CREATED", "UPDATED", "AGE"):
+        pt.align[column] = "l"
+    pt.sortby = "UPDATED"
+
+    rows = 0
+    for secret_type in types:
+        try:
+            secrets = runner.fetch_secrets(repo, secret_type)
+        except Exception as ex:
+            print(f"Warning: {ex}", file=sys.stderr)
+            continue
+        for secret in secrets or []:
+            updated = secret.get("updated_at")
+            pt.add_row(
+                [
+                    secret.get("name", ""),
+                    secret_type,
+                    _format_secret_time(secret.get("created_at")),
+                    _format_secret_time(updated),
+                    _format_secret_age(updated),
+                ]
+            )
+            rows += 1
+
+    if rows == 0:
+        print(f"No secrets found in {repo}", file=sys.stderr)
+        return
+    print(pt)
 
 
 def handle_repos_list(args):
@@ -1152,6 +1287,54 @@ def parse_args():
         action=argparse.BooleanOptionalAction,
     )
     subparser_repos_settings_push.set_defaults(func=handle_repos_settings_push)
+
+    subparser_repos_secrets = subparser_repos.add_parser(
+        "secrets", help="manage repository secrets"
+    ).add_subparsers()
+
+    subparser_repos_secrets_create = subparser_repos_secrets.add_parser(
+        "create", help="create a repository secret"
+    )
+    subparser_repos_secrets_create.add_argument("name", help="secret name")
+    subparser_repos_secrets_create.add_argument(
+        "--repo", help="repo name (owner/repo)", required=True
+    )
+    subparser_repos_secrets_create.add_argument(
+        "--type",
+        help="secret type (default: actions)",
+        choices=["actions", "agents", "codespaces", "dependabot"],
+        default="actions",
+    )
+    subparser_repos_secrets_create.set_defaults(func=handle_repos_secrets_create)
+
+    subparser_repos_secrets_update = subparser_repos_secrets.add_parser(
+        "update", help="update a repository secret"
+    )
+    subparser_repos_secrets_update.add_argument("name", help="secret name")
+    subparser_repos_secrets_update.add_argument(
+        "--repo", help="repo name (owner/repo)", required=True
+    )
+    subparser_repos_secrets_update.add_argument(
+        "--type",
+        help="secret type (default: actions)",
+        choices=["actions", "agents", "codespaces", "dependabot"],
+        default="actions",
+    )
+    subparser_repos_secrets_update.set_defaults(func=handle_repos_secrets_update)
+
+    subparser_repos_secrets_list = subparser_repos_secrets.add_parser(
+        "list", help="list repository secrets"
+    )
+    subparser_repos_secrets_list.add_argument(
+        "--repo", help="repo name (owner/repo)", required=True
+    )
+    subparser_repos_secrets_list.add_argument(
+        "--type",
+        help="secret type (default: all)",
+        choices=["all", "actions", "agents", "codespaces", "dependabot"],
+        default="all",
+    )
+    subparser_repos_secrets_list.set_defaults(func=handle_repos_secrets_list)
 
     subparser_cache = subparsers.add_parser("cache", help="manage cache")
 

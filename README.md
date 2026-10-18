@@ -57,3 +57,32 @@ python scripts/manage.py --help
 - Bulk enable and disable workflows across projects
 - List draft releases across a number of projects
 - Publish a draft release across a number of projects
+- Create and update repository secrets (Actions, Agents, Codespaces, Dependabot)
+
+## Repository secrets
+
+`repos secrets create` and `repos secrets update` write a repository secret. The
+value is read from STDIN when it is piped in, or from the terminal without
+echoing when it is not:
+
+```bash
+python scripts/manage.py repos secrets update --repo org/repo MY_SECRET < my-secret.txt
+python scripts/manage.py repos secrets update --repo org/repo MY_SECRET
+```
+
+`create` refuses to overwrite a secret that already exists, and `update` refuses
+to touch one that does not. Both default to an Actions secret; pass `--type` to
+target `agents`, `codespaces`, or `dependabot` instead. These commands only
+handle repository secrets. Environment secrets and Actions variables are out of
+scope.
+
+`repos secrets list` shows the secrets in a repo, oldest first, with when each
+was created and last updated:
+
+```bash
+python scripts/manage.py repos secrets list --repo org/repo
+python scripts/manage.py repos secrets list --repo org/repo --type actions
+```
+
+It lists every type by default. GitHub does not store an expiration date for
+secrets, so the table shows timestamps instead.

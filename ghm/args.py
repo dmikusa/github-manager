@@ -171,6 +171,37 @@ def format_settings_change(ch):
     return f"{where}: {current} -> {desired}"
 
 
+def format_push_results(results):
+    """Format push results into readable lines, highlighting failures."""
+    lines = []
+    for section, result in results.items():
+        if isinstance(result, dict) and result.get("status") == "error":
+            lines.append(f"    {section}: ERROR: {result.get('error', '').strip()}")
+            continue
+        if isinstance(result, dict) and result.get("status") == "partial":
+            lines.append(f"    {section}: PARTIAL")
+            for f in result.get("results", {}).get("failed", []):
+                lines.append(f"      {f.get('field')}: ERROR: {f.get('error', '').strip()}")
+            continue
+        if isinstance(result, list):
+            errors = [r for r in result if r.get("status") == "error"]
+            done = [r for r in result if r.get("status") != "error"]
+            summary = ", ".join(
+                sorted({f"{r.get('status')}" for r in done})
+            ) or "no changes"
+            lines.append(f"    {section}: {summary} ({len(done)} ok, {len(errors)} failed)")
+            for r in errors:
+                who = r.get("name") or r.get("slug") or r.get("login") or "?"
+                lines.append(f"      {who}: ERROR: {r.get('error', '').strip()}")
+            continue
+        status = result.get("status") if isinstance(result, dict) else result
+        detail = ""
+        if isinstance(result, dict) and result.get("reason"):
+            detail = f" ({result['reason']})"
+        lines.append(f"    {section}: {status}{detail}")
+    return lines
+
+
 def handle_repos_settings_push(args):
     runner = GhRunner()
 
@@ -183,14 +214,26 @@ def handle_repos_settings_push(args):
         repos = [args.repo]
     elif "repository" in settings and "full_name" in settings["repository"]:
         repos = [settings["repository"]["full_name"]]
-    else:
+    elif args.repo_filter:
         repos = filter_repos(load_repos(), None, args.repo_filter)
-        if not repos:
-            print("Error: No target repo specified. Use --repo or include repository.full_name in JSON", file=sys.stderr)
-            return
+    else:
+        print(
+            "Error: No target repo specified. Use --repo, --repo-filter,"
+            " or include repository.full_name in the JSON",
+            file=sys.stderr,
+        )
+        return
 
     branch = args.branch or "main"
     dry_run = args.dry_run or False
+    complete = args.complete or False
+
+    if not complete:
+        print(
+            "Per-repo settings (topics, collaborators, teams) will be skipped."
+            " Pass --complete to apply them.",
+            file=sys.stderr,
+        )
 
     # Skip the repo the settings came from - pushing to it is a no-op
     source_repo = settings.get("repository", {}).get("full_name")
@@ -205,7 +248,7 @@ def handle_repos_settings_push(args):
         if dry_run:
             try:
                 current = runner.fetch_all_settings(repo, branch)
-                changes = runner.settings_diff(settings, current)
+                changes = runner.settings_diff(settings, current, complete=complete)
             except Exception as ex:
                 print(f"  Error fetching settings for {repo}: {ex}", file=sys.stderr)
                 continue
@@ -218,10 +261,24 @@ def handle_repos_settings_push(args):
             continue
 
         try:
-            runner.push_all_settings(repo, settings, branch, dry_run)
-            print(f"  Settings pushed to {repo}", file=sys.stderr)
+            results = runner.push_all_settings(repo, settings, branch, dry_run, complete)
         except Exception as ex:
             print(f"  Error pushing settings to {repo}: {ex}", file=sys.stderr)
+            continue
+
+        failed = any(
+            (isinstance(r, dict) and r.get("status") in ("error", "partial"))
+            or (isinstance(r, list) and any(x.get("status") == "error" for x in r))
+            for r in results.values()
+        )
+        header = "  Settings pushed to"
+        print(f"{header} {repo}:", file=sys.stderr)
+        for line in format_push_results(results):
+            print(line, file=sys.stderr)
+        if failed:
+            print(f"  Done with errors for {repo}", file=sys.stderr)
+        else:
+            print(f"  Done for {repo}", file=sys.stderr)
 
 
 def handle_repos_list(args):
@@ -1088,6 +1145,11 @@ def parse_args():
     )
     subparser_repos_settings_push.add_argument(
         "--dry-run", help="show what would be changed without applying", action=argparse.BooleanOptionalAction
+    )
+    subparser_repos_settings_push.add_argument(
+        "--complete",
+        help="also apply per-repo settings (topics, collaborators, teams)",
+        action=argparse.BooleanOptionalAction,
     )
     subparser_repos_settings_push.set_defaults(func=handle_repos_settings_push)
 

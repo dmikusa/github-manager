@@ -634,40 +634,104 @@ class GhRunner:
         }
 
     def _clean_required_status_checks(self, data):
-        """Clean required_status_checks to only adjustable fields"""
+        """Clean required_status_checks to only adjustable fields.
+
+        The PUT branch-protection endpoint rejects the newer `checks` array, so
+        only `strict` and `contexts` are kept. `contexts` carries the same check
+        names and round-trips cleanly between repositories.
+        """
         if not data:
             return None
         return {
             "strict": data.get("strict"),
             "contexts": data.get("contexts"),
-            "checks": [
-                {"context": c.get("context"), "app_id": c.get("app_id")}
-                for c in data.get("checks", [])
-            ],
         }
+
+    def _clean_review_actors(self, data):
+        """Normalize dismissal/bypass actor lists to arrays of logins/slugs.
+
+        The API returns full user/team objects on read but expects plain strings
+        on write, so reduce each entry to its login (users) or slug (teams/apps).
+        """
+        if not data:
+            return None
+        return {
+            "users": [self._actor_name(u) for u in data.get("users", [])],
+            "teams": [self._actor_name(t) for t in data.get("teams", [])],
+            "apps": [self._actor_name(a) for a in data.get("apps", [])],
+        }
+
+    def _actor_name(self, actor):
+        if isinstance(actor, dict):
+            return actor.get("login") or actor.get("slug") or actor.get("name")
+        return actor
 
     def _clean_required_pull_request_reviews(self, data):
         """Clean required_pull_request_reviews to only adjustable fields"""
         if not data:
             return None
-        return {
+        reviews = {
             "dismiss_stale_reviews": data.get("dismiss_stale_reviews"),
             "require_code_owner_reviews": data.get("require_code_owner_reviews"),
             "require_last_push_approval": data.get("require_last_push_approval"),
             "required_approving_review_count": data.get("required_approving_review_count"),
-            "dismissal_restrictions": data.get("dismissal_restrictions"),
-            "bypass_pull_request_allowances": data.get("bypass_pull_request_allowances"),
         }
+        for key in ("dismissal_restrictions", "bypass_pull_request_allowances"):
+            actors = self._clean_review_actors(data.get(key))
+            if actors is not None:
+                reviews[key] = actors
+        return reviews
 
     def _clean_restrictions(self, data):
         """Clean restrictions to only adjustable fields"""
         if not data:
             return None
         return {
-            "users": data.get("users"),
-            "teams": data.get("teams"),
-            "apps": data.get("apps"),
+            "users": [self._actor_name(u) for u in data.get("users", [])],
+            "teams": [self._actor_name(t) for t in data.get("teams", [])],
+            "apps": [self._actor_name(a) for a in data.get("apps", [])],
         }
+
+    def _normalize_branch_protection(self, settings):
+        """Normalize a branch protection payload so it can be sent to the API.
+
+        Handles settings produced by older versions of this tool that included
+        the `checks` array and full user/team objects.
+        """
+        if not settings:
+            return None
+        rsc = settings.get("required_status_checks")
+        if rsc is not None:
+            rsc = {"strict": rsc.get("strict"), "contexts": rsc.get("contexts")}
+        rpr = settings.get("required_pull_request_reviews")
+        if rpr is not None:
+            rpr = dict(rpr)
+            for key in ("dismissal_restrictions", "bypass_pull_request_allowances"):
+                if rpr.get(key) is None:
+                    rpr.pop(key, None)
+                else:
+                    rpr[key] = self._clean_review_actors(rpr[key])
+        restrictions = settings.get("restrictions")
+        if restrictions is not None:
+            restrictions = self._clean_restrictions(restrictions)
+        normalized = {
+            "required_status_checks": rsc,
+            "enforce_admins": settings.get("enforce_admins"),
+            "required_pull_request_reviews": rpr,
+            "restrictions": restrictions,
+        }
+        for key in (
+            "required_linear_history",
+            "allow_force_pushes",
+            "allow_deletions",
+            "block_creations",
+            "required_conversation_resolution",
+            "lock_branch",
+            "allow_fork_syncing",
+        ):
+            if key in settings and settings.get(key) is not None:
+                normalized[key] = settings.get(key)
+        return normalized
 
     @cache
     def fetch_branch_protection(self, repo, branch="main"):
@@ -1020,62 +1084,75 @@ class GhRunner:
             },
         }
 
-    def push_all_settings(self, repo, settings, branch="main", dry_run=False):
-        """Push all repository settings from JSON"""
+    def push_all_settings(self, repo, settings, branch="main", dry_run=False, complete=False):
+        """Push all repository settings from JSON.
+
+        Per-repo settings (topics, collaborators and teams) vary between repos
+        and are only applied when `complete` is True.
+        """
         results = {}
+
+        def apply(section, fn, *args):
+            try:
+                results[section] = fn(*args)
+            except Exception as ex:
+                results[section] = {"status": "error", "error": str(ex)}
 
         # General settings
         if "general" in settings:
-            results["general"] = self.push_general_settings(repo, settings["general"], dry_run)
+            apply("general", self.push_general_settings, repo, settings["general"], dry_run, complete)
 
-        # Collaborators (direct and outside only - teams managed separately)
-        if "collaborators" in settings:
-            results["collaborators"] = self.push_collaborators(repo, settings["collaborators"], dry_run)
+        # Collaborators/teams are per-repo; only touch them when complete
+        if complete and "collaborators" in settings:
+            apply("collaborators", self.push_collaborators, repo, settings["collaborators"], dry_run)
+            apply("teams", self.push_teams, repo, settings["collaborators"], dry_run)
 
         # Branch protection and rulesets
         if "branches" in settings:
             branches = settings["branches"]
             if "branch_protection" in branches and branches["branch_protection"]:
-                results["branch_protection"] = self.push_branch_protection(repo, branch, branches["branch_protection"], dry_run)
+                apply("branch_protection", self.push_branch_protection, repo, branch, branches["branch_protection"], dry_run)
             if "rulesets" in branches:
-                results["rulesets"] = self.push_rulesets(repo, branches["rulesets"], dry_run)
+                apply("rulesets", self.push_rulesets, repo, branches["rulesets"], dry_run)
 
         # Actions settings
         if "actions" in settings:
             actions = settings["actions"]
             if "general" in actions:
-                results["actions_general"] = self.push_actions_permissions(repo, actions["general"], dry_run)
+                apply("actions_general", self.push_actions_permissions, repo, actions["general"], dry_run)
             if "workflow_permissions" in actions:
-                results["actions_workflow_permissions"] = self.push_actions_workflow_permissions(repo, actions["workflow_permissions"], dry_run)
+                apply("actions_workflow_permissions", self.push_actions_workflow_permissions, repo, actions["workflow_permissions"], dry_run)
             if "access" in actions and actions["access"]:
-                results["actions_access"] = self.push_actions_access_level(repo, actions["access"], dry_run)
+                apply("actions_access", self.push_actions_access_level, repo, actions["access"], dry_run)
             # Note: secrets are handled separately
 
         # Webhooks
         if "webhooks" in settings:
-            results["webhooks"] = self.push_webhooks(repo, settings["webhooks"], dry_run)
+            apply("webhooks", self.push_webhooks, repo, settings["webhooks"], dry_run)
 
         # Environments
         if "environments" in settings:
-            results["environments"] = self.push_environments(repo, settings["environments"], dry_run)
+            apply("environments", self.push_environments, repo, settings["environments"], dry_run)
 
         # Security settings
         if "security" in settings:
             security = settings["security"]
             if "code_security" in security and security["code_security"]:
-                results["code_security"] = self.push_code_security_config(repo, security["code_security"], dry_run)
+                apply("code_security", self.push_code_security_config, repo, security["code_security"], dry_run)
             if "code_scanning" in security and security["code_scanning"]:
-                results["code_scanning"] = self.push_code_scanning_setup(repo, security["code_scanning"], dry_run)
+                apply("code_scanning", self.push_code_scanning_setup, repo, security["code_scanning"], dry_run)
             if "code_quality" in security and security["code_quality"]:
-                results["code_quality"] = self.push_code_quality_setup(repo, security["code_quality"], dry_run)
+                apply("code_quality", self.push_code_quality_setup, repo, security["code_quality"], dry_run)
 
         return results
 
-    def settings_diff(self, desired, current):
+    def settings_diff(self, desired, current, complete=False):
         """Diff desired settings against a repo's current settings.
 
         Mirrors the sections push_all_settings actually applies. Returns a list of
         changes of the form {"section", "field", "name"?, "current", "desired", "action"?}.
+        Per-repo settings (topics, collaborators, teams) are only diffed when
+        `complete` is True.
         """
         changes = []
 
@@ -1087,9 +1164,11 @@ class GhRunner:
             "allow_update_branch", "use_squash_pr_title_as_default",
             "squash_merge_commit_message", "squash_merge_commit_title",
             "merge_commit_message", "merge_commit_title", "archived",
-            "allow_forking", "web_commit_signoff_required", "default_branch",
-            "topics", "visibility"
+            "web_commit_signoff_required", "default_branch",
+            "visibility"
         }
+        if complete:
+            allowed_general.add("topics")
         d = desired.get("general") or {}
         c = current.get("general") or {}
         for k in sorted(allowed_general):
@@ -1099,23 +1178,33 @@ class GhRunner:
             if dv != c.get(k):
                 changes.append({"section": "general", "field": k, "current": c.get(k), "desired": dv})
 
-        # Collaborators - push only applies direct and outside (add/update, no removal)
-        dc = desired.get("collaborators") or {}
-        cc = current.get("collaborators") or {}
-        for kind in ("direct", "outside"):
-            dlist = {x.get("login"): x for x in dc.get(kind, []) if x.get("login")}
-            clist = {x.get("login"): x for x in cc.get(kind, []) if x.get("login")}
-            for login in sorted(dlist):
-                dp = self._collab_permission(dlist[login])
-                if login not in clist:
-                    changes.append({"section": "collaborators", "field": kind, "name": login, "action": "add", "desired": dp})
-                elif dp != self._collab_permission(clist[login]):
-                    changes.append({"section": "collaborators", "field": kind, "name": login, "current": self._collab_permission(clist[login]), "desired": dp})
+        # Collaborators - only applied when complete
+        if complete:
+            dc = desired.get("collaborators") or {}
+            cc = current.get("collaborators") or {}
+            for kind in ("direct", "outside"):
+                dlist = {x.get("login"): x for x in dc.get(kind, []) if x.get("login")}
+                clist = {x.get("login"): x for x in cc.get(kind, []) if x.get("login")}
+                for login in sorted(dlist):
+                    dp = self._collab_permission(dlist[login])
+                    if login not in clist:
+                        changes.append({"section": "collaborators", "field": kind, "name": login, "action": "add", "desired": dp})
+                    elif dp != self._collab_permission(clist[login]):
+                        changes.append({"section": "collaborators", "field": kind, "name": login, "current": self._collab_permission(clist[login]), "desired": dp})
+            # Teams are matched by slug
+            dteams = {t.get("slug"): t for t in dc.get("teams", []) if t.get("slug")}
+            cteams = {t.get("slug"): t for t in cc.get("teams", []) if t.get("slug")}
+            for slug in sorted(dteams):
+                dp = dteams[slug].get("permission")
+                if slug not in cteams:
+                    changes.append({"section": "teams", "field": "permission", "name": slug, "action": "add", "desired": dp})
+                elif dp != cteams[slug].get("permission"):
+                    changes.append({"section": "teams", "field": "permission", "name": slug, "current": cteams[slug].get("permission"), "desired": dp})
 
         # Branches
         db = desired.get("branches") or {}
         cb = current.get("branches") or {}
-        self._diff_scalars(changes, "branch_protection", db.get("branch_protection") or {}, cb.get("branch_protection") or {})
+        self._diff_scalars(changes, "branch_protection", self._normalize_branch_protection(db.get("branch_protection")) or {}, cb.get("branch_protection") or {})
         self._diff_by_name(changes, "rulesets", db.get("rulesets") or [], cb.get("rulesets") or [])
 
         # Actions
@@ -1125,8 +1214,8 @@ class GhRunner:
         self._diff_scalars(changes, "actions.workflow_permissions", da.get("workflow_permissions") or {}, ca.get("workflow_permissions") or {})
         self._diff_scalars(changes, "actions.access", da.get("access") or {}, ca.get("access") or {})
 
-        # Webhooks and environments - match by name
-        self._diff_by_name(changes, "webhooks", desired.get("webhooks") or [], current.get("webhooks") or [])
+        # Webhooks (authoritative: extras are removed) and environments - match by name
+        self._diff_by_name(changes, "webhooks", desired.get("webhooks") or [], current.get("webhooks") or [], report_removals=True)
         self._diff_by_name(changes, "environments", desired.get("environments") or [], current.get("environments") or [])
 
         # Security - code_security is never pushed; secrets are not pushed here
@@ -1146,7 +1235,7 @@ class GhRunner:
             if dv != cv:
                 changes.append({"section": section, "field": k, "current": cv, "desired": dv})
 
-    def _diff_by_name(self, changes, section, desired, current):
+    def _diff_by_name(self, changes, section, desired, current, report_removals=False):
         """Diff two lists of dicts, matched by 'name'. A None desired value means 'skip'."""
         desired_map = {x.get("name"): x for x in desired if x.get("name")}
         current_map = {x.get("name"): x for x in current if x.get("name")}
@@ -1163,6 +1252,10 @@ class GhRunner:
                 cv = c.get(k)
                 if dv != cv:
                     changes.append({"section": section, "field": k, "name": name, "current": cv, "desired": dv})
+        if report_removals:
+            for name in sorted(current_map):
+                if name not in desired_map:
+                    changes.append({"section": section, "field": "name", "name": name, "action": "remove", "current": current_map[name]})
 
     def _collab_permission(self, collab):
         """Normalize a collaborator entry to its highest permission string."""
@@ -1175,8 +1268,11 @@ class GhRunner:
         return perm
 
     @invalidate("fetch_repo")
-    def push_general_settings(self, repo, settings, dry_run=False):
-        """Push general repository settings"""
+    def push_general_settings(self, repo, settings, dry_run=False, complete=False):
+        """Push general repository settings.
+
+        Topics are per-repo and only applied when `complete` is True.
+        """
         # Filter to only adjustable fields - exclude identity fields (name, owner, etc.)
         # Also exclude fields that are unique per repo (description, homepage)
         allowed_fields = {
@@ -1186,9 +1282,11 @@ class GhRunner:
             "allow_update_branch", "use_squash_pr_title_as_default",
             "squash_merge_commit_message", "squash_merge_commit_title",
             "merge_commit_message", "merge_commit_title", "archived",
-            "allow_forking", "web_commit_signoff_required", "default_branch",
-            "topics", "visibility"
+            "web_commit_signoff_required", "default_branch",
+            "visibility"
         }
+        if complete:
+            allowed_fields.add("topics")
         data = {k: v for k, v in settings.items() if k in allowed_fields and v is not None}
         if not data:
             return {"status": "skipped", "reason": "no adjustable fields"}
@@ -1197,6 +1295,16 @@ class GhRunner:
             return {"status": "dry_run", "changes": data}
 
         results = {"updated": [], "failed": []}
+
+        def patch(fields):
+            cmd = ["gh", "api", "--method", "PATCH", f"/repos/{repo}", "--input", "-"]
+            res = subprocess.run(cmd, input=json.dumps(fields).encode(), capture_output=True)
+            if res.returncode == 0:
+                results["updated"].extend(fields.keys())
+            else:
+                err = res.stderr.decode() if res.stderr else res.stdout.decode()
+                for k in fields:
+                    results["failed"].append({"field": k, "error": err})
 
         # For topics, use the dedicated endpoint
         if "topics" in data:
@@ -1208,28 +1316,32 @@ class GhRunner:
             else:
                 results["failed"].append({"field": "topics", "error": res.stderr.decode()})
 
-        # Try to update each remaining field individually to handle partial failures
-        for k, v in data.items():
-            cmd = ["gh", "api", "--method", "PATCH", f"/repos/{repo}"]
-            if isinstance(v, bool):
-                cmd.extend(["-F", f"{k}={str(v).lower()}"])
-            elif isinstance(v, list):
-                cmd.extend(["--input", "-"])
-                res = subprocess.run(cmd, input=json.dumps({k: v}).encode(), capture_output=True)
-                if res.returncode == 0:
-                    results["updated"].append(k)
-                else:
-                    err = res.stderr.decode() if res.stderr else res.stdout.decode()
-                    results["failed"].append({"field": k, "error": err})
+        # GitHub validates these fields as pairs and rejects a lone value, so
+        # send each pair together (filling in the current value when absent).
+        pairs = (
+            ("squash_merge_commit_title", "squash_merge_commit_message"),
+            ("merge_commit_title", "merge_commit_message"),
+        )
+        handled = set()
+        current = None
+        for pair in pairs:
+            fields = {k: data[k] for k in pair if k in data}
+            if not fields:
                 continue
-            else:
-                cmd.extend(["-f", f"{k}={v}"])
-            res = subprocess.run(cmd, capture_output=True)
-            if res.returncode == 0:
-                results["updated"].append(k)
-            else:
-                err = res.stderr.decode() if res.stderr else res.stdout.decode()
-                results["failed"].append({"field": k, "error": err})
+            if len(fields) < len(pair):
+                if current is None:
+                    current = self.fetch_repo(repo)
+                for k in pair:
+                    if k not in fields and current.get(k) is not None:
+                        fields[k] = current[k]
+            patch(fields)
+            handled.update(pair)
+
+        # Update remaining fields individually to isolate partial failures
+        for k, v in data.items():
+            if k in handled:
+                continue
+            patch({k: v})
 
         if results["failed"]:
             return {"status": "partial", "results": results}
@@ -1238,119 +1350,64 @@ class GhRunner:
     @invalidate("fetch_collaborators")
     def push_collaborators(self, repo, settings, dry_run=False):
         """Push repository collaborators (direct and outside only)"""
-        results = {"direct": [], "outside": []}
+        results = []
 
-        # Handle direct collaborators
-        for collab in settings.get("direct", []):
-            login = collab.get("login")
-            permission = collab.get("permission") or collab.get("permissions")
-            if not login:
-                continue
+        for kind in ("direct", "outside"):
+            for collab in settings.get(kind, []):
+                login = collab.get("login")
+                permission = collab.get("permission") or collab.get("permissions")
+                if not login:
+                    continue
 
-            if dry_run:
-                results["direct"].append({"login": login, "status": "dry_run", "permission": permission})
-                continue
+                perm_value = "push"
+                if isinstance(permission, dict):
+                    if permission.get("admin"):
+                        perm_value = "admin"
+                    elif permission.get("maintain"):
+                        perm_value = "maintain"
+                    elif permission.get("push"):
+                        perm_value = "push"
+                    elif permission.get("triage"):
+                        perm_value = "triage"
+                    elif permission.get("pull"):
+                        perm_value = "pull"
+                elif isinstance(permission, str):
+                    perm_value = permission
 
-            # Convert permission to GitHub format
-            perm_value = "push"
-            if isinstance(permission, dict):
-                if permission.get("admin"):
-                    perm_value = "admin"
-                elif permission.get("maintain"):
-                    perm_value = "maintain"
-                elif permission.get("push"):
-                    perm_value = "push"
-                elif permission.get("triage"):
-                    perm_value = "triage"
-                elif permission.get("pull"):
-                    perm_value = "pull"
-            elif isinstance(permission, str):
-                perm_value = permission
+                if dry_run:
+                    results.append({"login": login, "kind": kind, "status": "dry_run", "permission": perm_value})
+                    continue
 
-            cmd = ["gh", "api", "--method", "PUT", f"/repos/{repo}/collaborators/{login}", "-f", f"permission={perm_value}"]
-            res = subprocess.run(cmd, capture_output=True)
-            if res.returncode == 0:
-                results["direct"].append({"login": login, "status": "updated", "permission": perm_value})
-            else:
-                results["direct"].append({"login": login, "status": "error", "error": res.stderr.decode()})
-
-        # Handle outside collaborators
-        for collab in settings.get("outside", []):
-            login = collab.get("login")
-            permission = collab.get("permission") or collab.get("permissions")
-            if not login:
-                continue
-
-            if dry_run:
-                results["outside"].append({"login": login, "status": "dry_run", "permission": permission})
-                continue
-
-            perm_value = "push"
-            if isinstance(permission, dict):
-                if permission.get("admin"):
-                    perm_value = "admin"
-                elif permission.get("maintain"):
-                    perm_value = "maintain"
-                elif permission.get("push"):
-                    perm_value = "push"
-                elif permission.get("triage"):
-                    perm_value = "triage"
-                elif permission.get("pull"):
-                    perm_value = "pull"
-            elif isinstance(permission, str):
-                perm_value = permission
-
-            cmd = ["gh", "api", "--method", "PUT", f"/repos/{repo}/collaborators/{login}", "-f", f"permission={perm_value}"]
-            res = subprocess.run(cmd, capture_output=True)
-            if res.returncode == 0:
-                results["outside"].append({"login": login, "status": "updated", "permission": perm_value})
-            else:
-                results["outside"].append({"login": login, "status": "error", "error": res.stderr.decode()})
+                cmd = ["gh", "api", "--method", "PUT", f"/repos/{repo}/collaborators/{login}", "-f", f"permission={perm_value}"]
+                res = subprocess.run(cmd, capture_output=True)
+                if res.returncode == 0:
+                    results.append({"login": login, "kind": kind, "status": "updated", "permission": perm_value})
+                else:
+                    results.append({"login": login, "kind": kind, "status": "error", "error": res.stderr.decode()})
 
         return results
 
     @invalidate("fetch_branch_protection")
     def push_branch_protection(self, repo, branch, settings, dry_run=False):
         """Push branch protection rules"""
+        normalized = self._normalize_branch_protection(settings)
         if dry_run:
-            return {"status": "dry_run", "branch": branch, "changes": settings}
+            return {"status": "dry_run", "branch": branch, "changes": normalized}
 
-        # Build the protection payload
-        data = {}
-        if settings.get("required_status_checks"):
-            data["required_status_checks"] = settings["required_status_checks"]
-        if settings.get("enforce_admins") is not None:
-            data["enforce_admins"] = settings["enforce_admins"]
-        if settings.get("required_pull_request_reviews"):
-            data["required_pull_request_reviews"] = settings["required_pull_request_reviews"]
-        if settings.get("restrictions"):
-            data["restrictions"] = settings["restrictions"]
-        if settings.get("required_linear_history") is not None:
-            data["required_linear_history"] = settings["required_linear_history"]
-        if settings.get("allow_force_pushes") is not None:
-            data["allow_force_pushes"] = settings["allow_force_pushes"]
-        if settings.get("allow_deletions") is not None:
-            data["allow_deletions"] = settings["allow_deletions"]
-        if settings.get("block_creations") is not None:
-            data["block_creations"] = settings["block_creations"]
-        if settings.get("required_conversation_resolution") is not None:
-            data["required_conversation_resolution"] = settings["required_conversation_resolution"]
-        if settings.get("lock_branch") is not None:
-            data["lock_branch"] = settings["lock_branch"]
-        if settings.get("allow_fork_syncing") is not None:
-            data["allow_fork_syncing"] = settings["allow_fork_syncing"]
-
-        if not data:
+        if not normalized or all(
+            normalized.get(k) is None
+            for k in ("required_status_checks", "required_pull_request_reviews", "restrictions")
+        ):
             return {"status": "skipped", "reason": "no protection settings"}
 
         cmd = ["gh", "api", "--method", "PUT", f"/repos/{repo}/branches/{branch}/protection"]
         cmd.extend(["--input", "-"])
-        proc = subprocess.run(cmd, input=json.dumps(data).encode(), capture_output=True)
+        proc = subprocess.run(cmd, input=json.dumps(normalized).encode(), capture_output=True)
         if proc.returncode == 404 or b"404" in proc.stderr:
             return {"status": "skipped", "reason": f"branch '{branch}' not found"}
         if proc.returncode != 0:
             return {"status": "error", "error": proc.stderr.decode()}
-        return {"status": "updated", "data": json.loads(proc.stdout)}
+        return {"status": "updated"}
 
     @invalidate("fetch_rulesets")
     def push_rulesets(self, repo, rulesets, dry_run=False):
@@ -1430,17 +1487,30 @@ class GhRunner:
 
     @invalidate("fetch_webhooks")
     def push_webhooks(self, repo, webhooks, dry_run=False):
-        """Push webhooks"""
+        """Push webhooks, removing any that are not present in the desired set"""
         results = []
+        desired_urls = {
+            wh.get("config", {}).get("url")
+            for wh in webhooks
+            if wh.get("config", {}).get("url")
+        }
+        if dry_run:
+            for wh in webhooks:
+                name = wh.get("name")
+                url = wh.get("config", {}).get("url")
+                results.append({"name": name, "status": "dry_run", "url": url})
+            return results
+
+        # Fetch existing hooks once
+        cmd = ["gh", "api", "--paginate", f"/repos/{repo}/hooks"]
+        res = subprocess.run(cmd, capture_output=True, check=True)
+        existing = json.loads(res.stdout)
+
         for wh in webhooks:
             name = wh.get("name")
             config = wh.get("config", {})
             url = config.get("url")
             if not name or not url:
-                continue
-
-            if dry_run:
-                results.append({"name": name, "status": "dry_run", "url": url})
                 continue
 
             data = {
@@ -1453,24 +1523,61 @@ class GhRunner:
                     "insecure_ssl": config.get("insecure_ssl", "0"),
                 }
             }
-            # Try to find existing webhook
-            cmd = ["gh", "api", "--paginate", f"/repos/{repo}/hooks"]
-            res = subprocess.run(cmd, capture_output=True, check=True)
-            existing = json.loads(res.stdout)
-            existing_id = None
-            for w in existing:
-                if w.get("config", {}).get("url") == url:
-                    existing_id = w.get("id")
-                    break
-
+            existing_id = next(
+                (w.get("id") for w in existing if w.get("config", {}).get("url") == url),
+                None,
+            )
             if existing_id:
                 cmd = ["gh", "api", "--method", "PATCH", f"/repos/{repo}/hooks/{existing_id}"]
             else:
                 cmd = ["gh", "api", "--method", "POST", f"/repos/{repo}/hooks"]
-
             cmd.extend(["--input", "-"])
-            proc = subprocess.run(cmd, input=json.dumps(data).encode(), capture_output=True, check=True)
-            results.append({"name": name, "status": "updated" if existing_id else "created", "data": json.loads(proc.stdout)})
+            proc = subprocess.run(cmd, input=json.dumps(data).encode(), capture_output=True)
+            if proc.returncode == 0:
+                results.append({"name": name, "status": "updated" if existing_id else "created"})
+            else:
+                results.append({"name": name, "status": "error", "error": proc.stderr.decode()})
+
+        # Remove hooks that are no longer desired
+        for w in existing:
+            if w.get("config", {}).get("url") in desired_urls:
+                continue
+            hook_id = w.get("id")
+            proc = subprocess.run(
+                ["gh", "api", "--method", "DELETE", f"/repos/{repo}/hooks/{hook_id}"],
+                capture_output=True,
+            )
+            if proc.returncode == 0:
+                results.append({"name": w.get("name"), "status": "deleted"})
+            else:
+                results.append({"name": w.get("name"), "status": "error", "error": proc.stderr.decode()})
+
+        return results
+
+    @invalidate("fetch_collaborators")
+    def push_teams(self, repo, settings, dry_run=False):
+        """Push team repository permissions from the collaborators.teams list"""
+        teams = settings.get("teams", [])
+        org, name = repo.split("/", 1)
+        results = []
+        for team in teams:
+            slug = team.get("slug")
+            permission = team.get("permission")
+            if not slug or not permission:
+                continue
+            if dry_run:
+                results.append({"slug": slug, "status": "dry_run", "permission": permission})
+                continue
+            cmd = [
+                "gh", "api", "--method", "PUT",
+                f"/orgs/{org}/teams/{slug}/repos/{org}/{name}",
+                "-f", f"permission={permission}",
+            ]
+            proc = subprocess.run(cmd, capture_output=True)
+            if proc.returncode == 0:
+                results.append({"slug": slug, "status": "updated", "permission": permission})
+            else:
+                results.append({"slug": slug, "status": "error", "error": proc.stderr.decode()})
         return results
 
     @invalidate("fetch_environments")

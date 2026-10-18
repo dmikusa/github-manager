@@ -987,6 +987,70 @@ class GhRunner:
             ],
         }
 
+    def secret_exists(self, repo, name, secret_type="actions"):
+        """Check whether a repository secret of the given type exists
+
+        `secret_type` is one of the `gh secret set --app` applications:
+        actions, agents, codespaces or dependabot.
+        """
+        cmd = ["gh", "api", f"/repos/{repo}/{secret_type}/secrets/{name}"]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode == 0:
+            return True
+        if res.returncode == 404 or b"404" in res.stderr:
+            return False
+        err = res.stderr.decode() if res.stderr else res.stdout.decode()
+        raise Exception(f"Failed to check secret {name}: {err.strip()}")
+
+    @cache
+    def fetch_secrets(self, repo, secret_type="actions"):
+        """Fetch repository secrets of a given type (metadata only, no values)
+
+        Returns a list of secret metadata, or None when the type is not
+        available for the repo. `secret_type` is one of actions, agents,
+        codespaces or dependabot.
+        """
+        cmd = ["gh", "api", "--paginate", f"/repos/{repo}/{secret_type}/secrets"]
+        res = subprocess.run(cmd, capture_output=True)
+        if res.returncode == 404 or b"404" in res.stderr:
+            return None
+        if res.returncode != 0:
+            err = res.stderr.decode() if res.stderr else res.stdout.decode()
+            raise Exception(f"Failed to list {secret_type} secrets: {err.strip()}")
+        if not res.stdout.strip():
+            return None
+        return json.loads(res.stdout).get("secrets", [])
+
+    @invalidate(
+        "fetch_actions_secrets",
+        "fetch_dependabot_secrets",
+        "fetch_codespaces_secrets",
+        "fetch_secrets",
+    )
+    def secret_set(self, repo, name, value, secret_type="actions"):
+        """Create or update a repository secret of the given type
+
+        `gh` encrypts the value locally with the repository's public key
+        before it is sent to GitHub, so the plaintext never leaves the
+        machine. `secret_type` is one of actions, agents, codespaces or
+        dependabot.
+        """
+        cmd = [
+            "gh",
+            "secret",
+            "set",
+            name,
+            "--repo",
+            repo,
+            "--app",
+            secret_type,
+        ]
+        res = subprocess.run(cmd, input=value.encode(), capture_output=True)
+        if res.returncode != 0:
+            err = res.stderr.decode() if res.stderr else res.stdout.decode()
+            raise Exception(f"Failed to set secret {name}: {err.strip()}")
+        return True
+
     def _clean_org_secret(self, secret):
         """Clean org secret to only adjustable fields"""
         return {
